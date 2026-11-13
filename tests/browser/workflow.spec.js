@@ -18,7 +18,10 @@ test('booking, cancellation, review, moderation, schedule and consultation', asy
   await login(page, 'Клиент');
   await page.getByRole('link', { name: 'Найти специалиста', exact: true }).first().click();
   await page.locator('.specialist-card').first().getByRole('button', { name: 'Выбрать время' }).click();
+  await page.getByRole('button', { name: 'Выбрать дату и время' }).click();
+  await page.locator('[data-day]').first().click();
   await page.locator('[data-slot]').first().click();
+  await page.getByRole('button', { name: 'Продолжить' }).click();
   await page.getByLabel('Адрес выезда').fill('Киров, ул. Ленина, 99');
   await page.getByRole('button', { name: 'Подтвердить запись' }).click();
   await expect(page.locator('.booking-row .confirmed')).toHaveCount(1);

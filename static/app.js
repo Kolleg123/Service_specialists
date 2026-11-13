@@ -3,17 +3,28 @@ const $$ = (s, p = document) => [...p.querySelectorAll(s)];
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const money = n => new Intl.NumberFormat('ru-RU').format(n) + ' ₽';
 const date = s => new Date(s).toLocaleDateString('ru-RU', {day:'numeric', month:'long'});
+const reviewCount = n => `${n} ${n % 100 >= 11 && n % 100 <= 14 ? 'отзывов' : n % 10 === 1 ? 'отзыв' : n % 10 >= 2 && n % 10 <= 4 ? 'отзыва' : 'отзывов'}`;
 const time = s => s.slice(11,16);
 const localNow = () => new Date().toLocaleString('sv-SE', {timeZone:'Europe/Kirov'}).replace(' ', 'T').slice(0,16);
 const icons = {'Все специалисты':'✧','Дом и ремонт':'⌂','Красота':'✂','Обучение':'▤','Здоровье':'♡','Мероприятия':'◎'};
 let state = {user:null, csrf:'', specialists:[], categories:[], category:'Все специалисты', query:'', sort:'recommended', maxPrice:'', mode:''};
 let dashboardTab = 'bookings';
 let catalogRequest = 0;
+const chatLauncher = $('#chat-launch');
 async function api(path, data) {
-  const response = await fetch('/api' + path, {method:data === undefined ? 'GET':'POST', headers:{'Content-Type':'application/json','X-CSRF-Token':state.csrf}, body:data === undefined ? undefined : JSON.stringify(data)});
-  let result; try {result = await response.json();} catch {throw new Error('Сервер временно недоступен');}
-  if (!response.ok) throw new Error(result.error || 'Не удалось выполнить действие');
-  return result;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 15000);
+  try {
+    const response = await fetch('/api' + path, {method:data === undefined ? 'GET':'POST', signal:controller.signal,
+      headers:{'Content-Type':'application/json','X-CSRF-Token':state.csrf}, body:data === undefined ? undefined : JSON.stringify(data)});
+    let result; try { result = await response.json(); } catch { throw new Error('Сервер временно недоступен'); }
+    if (!response.ok) { const error = new Error(result.error || 'Не удалось выполнить действие'); error.status = response.status; throw error; }
+    return result;
+  } catch (error) {
+    if (error.name === 'AbortError') throw new Error('Сервер не ответил вовремя. Повторите попытку.');
+    if (error instanceof TypeError) throw new Error('Нет связи с сервером. Проверьте подключение и повторите попытку.');
+    throw error;
+  } finally { clearTimeout(timeout); }
 }
 function toast(message) {$('#toast').textContent = message; $('#toast').classList.add('show'); clearTimeout(toast.timer); toast.timer = setTimeout(() => $('#toast').classList.remove('show'), 4500);}
 function modal(html) {$('#modal-content').innerHTML = html; if (!$('#modal').open) $('#modal').showModal();}
@@ -22,10 +33,10 @@ function updateAccount() {$('#account').innerHTML = state.user ? `${esc(state.us
 async function refreshCatalog() {const data = await api('/catalog'); state.specialists = data.specialists; state.categories = data.categories;}
 function card(s) {
  const min = s.services.length ? Math.min(...s.services.map(x => x.price)) : null;
- return `<article class="specialist-card"><button class="photo-button" data-profile="${s.id}" aria-label="Профиль: ${esc(s.name)}"><img src="${esc(s.photo)}" alt="Демонстрационное фото специалиста ${esc(s.name)}" loading="lazy"><span class="photo-label">${esc(s.category)}</span><span class="photo-arrow">↗</span></button><div class="card-body"><div class="rating">★ <b>${s.rating ?? 'Новый'}</b><span>${s.reviews.length ? s.reviews.length + ' отзыв(ов)' : 'Пока без отзывов'}</span></div><button class="name-link" data-profile="${s.id}">${esc(s.name)}</button><p class="profession">${esc(s.profession)} <span>· ${s.experience} лет опыта</span></p><p class="location">⌖ ${esc(s.location)}</p><div class="tags">${s.skills.split(',').slice(0,2).map(x => `<span>${esc(x)}</span>`).join('')}</div><div class="card-bottom"><div><small>Стоимость услуг</small><strong>${min === null ? 'Нет услуг' : 'от ' + money(min)}</strong></div><button class="button pale" data-profile="${s.id}">Выбрать время <span>↗</span></button></div></div></article>`;
+ return `<article class="specialist-card"><button class="photo-button" data-profile="${s.id}" aria-label="Профиль: ${esc(s.name)}"><img src="${esc(s.photo)}" alt="Демонстрационное фото специалиста ${esc(s.name)}" loading="lazy"><span class="photo-label">${esc(s.category)}</span><span class="photo-arrow">↗</span></button><div class="card-body"><div class="rating">★ <b>${s.rating ?? 'Новый'}</b><span>${s.reviews.length ? reviewCount(s.reviews.length) : 'Пока без отзывов'}</span></div><button class="name-link" data-profile="${s.id}">${esc(s.name)}</button><p class="profession">${esc(s.profession)} <span>· ${s.experience} лет опыта</span></p><p class="location">⌖ ${esc(s.location)}</p><div class="tags">${s.skills.split(',').slice(0,2).map(x => `<span>${esc(x)}</span>`).join('')}</div><div class="card-bottom"><div><small>Стоимость услуг</small><strong>${min === null ? 'Нет услуг' : 'от ' + money(min)}</strong></div><button class="button pale" data-profile="${s.id}">Выбрать время <span>↗</span></button></div></div></article>`;
 }
 function catalog() {
- $('#app').innerHTML = `<section class="hero"><div class="hero-text"><span class="eyebrow"><i></i> ХОРОШИЕ СПЕЦИАЛИСТЫ РЯДОМ</span><h1>Нужный человек.<br><em>В удобное время.</em></h1><p>От ремонта крана до нового увлечения — найдите своего<br class="desktop"> специалиста и запишитесь без лишних звонков.</p><form id="search-form" class="search-box"><span>⌕</span><input id="search-input" placeholder="Какая помощь вам нужна?" aria-label="Поиск специалистов" value="${esc(state.query)}"><button class="button">Найти <span>↗</span></button></form><div class="popular">Например: <button data-query="Сантехник">сантехник</button><button data-query="Стрижка">стрижка</button><button data-query="Английский">английский</button></div><div class="hero-proof"><div class="mini-faces">${state.specialists.slice(0,3).map(s=>`<img src="${s.photo}" alt="">`).join('')}</div><div><strong>Меньше поисков. Больше жизни.</strong><span>Свободные слоты и понятные цены</span></div></div></div><div class="hero-art"><img src="/static/photos/hero.jpg" alt="Светлая уютная гостиная"><span class="art-caption">Больше времени<br>на то, что важно.</span><div class="float-card"><span class="check-round">✓</span><div><strong>Всё складывается</strong><span>Выбирайте время — остальное за нами</span></div><span>✧</span></div><div class="art-top">СВОБОДНО ДЛЯ ВАШИХ ПЛАНОВ <span>↗</span></div></div></section>
+ $('#app').innerHTML = `<section class="hero"><div class="hero-text"><span class="eyebrow"><i></i> ХОРОШИЕ СПЕЦИАЛИСТЫ РЯДОМ</span><h1>Нужный человек.<br><em>В удобное время.</em></h1><p>От ремонта крана до нового увлечения — найдите своего<br class="desktop"> специалиста и запишитесь без лишних звонков.</p><form id="search-form" class="search-box"><span>⌕</span><input id="search-input" placeholder="Какая помощь вам нужна?" aria-label="Поиск специалистов" value="${esc(state.query)}"><button class="button">Найти <span>↗</span></button></form><div class="popular">Например: <button data-query="Сантехник">сантехник</button><button data-query="Стрижка">стрижка</button><button data-query="Английский">английский</button></div><div class="hero-proof"><div class="mini-faces">${state.specialists.slice(0,3).map(s=>`<img src="${s.photo}" alt="">`).join('')}</div><div><strong>Меньше поисков. Больше жизни.</strong><span>Свободные слоты и понятные цены</span></div></div></div><div class="hero-art"><img src="/static/photos/hero.jpg" alt="Стилист работает над причёской клиента в салоне"><span class="art-caption">Хорошая работа<br>начинается с человека.</span><div class="float-card"><span class="check-round">✓</span><div><strong>Всё складывается</strong><span>Выбирайте время — остальное за нами</span></div><span>✧</span></div><div class="art-top">СВОБОДНО ДЛЯ ВАШИХ ПЛАНОВ <span>↗</span></div></div></section>
  <section class="catalog-section" id="catalog-section"><div class="section-title"><div><span class="eyebrow">НАЙДИТЕ СВОЕГО</span><h2>Специалисты, которым по пути с вами</h2></div><span class="catalog-count"></span></div><div class="category-tabs">${state.categories.map(c=>`<button data-category="${esc(c)}" class="${state.category===c?'selected':''}"><span>${icons[c]}</span>${esc(c)}</button>`).join('')}</div><div class="filter-bar"><div class="filters"><label><span>Формат</span><select id="mode-filter"><option value="">Любой формат</option>${['Выезд','У специалиста','Онлайн','Группа'].map(m=>`<option ${state.mode===m?'selected':''}>${m}</option>`).join('')}</select></label><label><span>Цена до</span><select id="price-filter"><option value="">Любая цена</option>${[1500,2500,5000].map(n=>`<option value="${n}" ${state.maxPrice==n?'selected':''}>${money(n)}</option>`).join('')}</select></label><button id="reset-filter" class="text-button">Сбросить</button></div><label class="sort-label">Сначала <select id="sort-filter"><option value="recommended">рекомендуемые</option><option value="price">недорогие</option><option value="rating">с высоким рейтингом</option><option value="experience">опытные</option></select></label></div><div id="cards" class="card-grid"></div></section>
  <section class="help-banner"><div class="help-symbol">✧</div><div><h2>Не знаете, кого выбрать?</h2><p>Опишите задачу — наш помощник подскажет, к кому обратиться.</p></div><button class="button light" id="banner-chat">Спросить помощника ↗</button></section>
  <section class="how" id="how-section"><div><span class="eyebrow">ВСЁ ПРОСТО</span><h2>От задачи до встречи —<br>три шага</h2></div>${[['01','Найдите специалиста','Выберите категорию, сравните услуги и прочитайте отзывы.'],['02','Выберите время','Только доступные слоты. Дата, время и стоимость — сразу перед вами.'],['03','Занимайтесь своим','Ваша запись в личном кабинете. Планы изменились? Её можно отменить.']].map(([n,t,p])=>`<article><span>${n}</span><h3>${t}</h3><p>${p}</p></article>`).join('')}</section>`;
@@ -38,6 +49,7 @@ function catalog() {
  $('#sort-filter').onchange=e=>{state.sort=e.target.value;drawCards();};
  $('#reset-filter').onclick=()=>{state.category='Все специалисты';state.mode='';state.maxPrice='';state.query='';catalog();};
  $('#banner-chat').onclick=openChat;
+ $('#catalog-section').insertBefore(chatLauncher,$('.filter-bar'));
  drawCards();
 }
 function drawCards() {
@@ -50,31 +62,6 @@ function drawCards() {
  bindProfiles($('#cards'));
 }
 function bindProfiles(root=document) {$$('[data-profile]',root).forEach(b=>b.onclick=()=>profile(Number(b.dataset.profile)).catch(e=>toast(e.message)));}
-async function profile(id) {
- const s=state.specialists.find(x=>x.id===id); if(!s)return toast('Специалист сейчас недоступен');
- modal('<div class="loading">Загружаем расписание…</div>');
- const {slots}=await api('/slots/'+id);
- modal(`<div class="profile-head"><img src="${s.photo}" alt="${esc(s.name)}"><div><span class="eyebrow">${esc(s.profession)}</span><h2>${esc(s.name)}</h2><p>★ ${s.rating??'Новый специалист'} · ${s.experience} лет опыта</p><p>${esc(s.location)}</p></div></div><p class="bio">${esc(s.bio)}</p><div class="tags">${s.skills.split(',').map(x=>`<span>${esc(x)}</span>`).join('')}</div><details class="education"><summary>Образование и квалификация</summary><p>${esc(s.education)}</p></details><h3>Услуги и свободное время</h3><p class="muted">Время Кирова (UTC+3). Оплата напрямую специалисту после встречи.</p><label class="field">Услуга<select id="booking-service">${s.services.map(v=>`<option value="${v.id}">${esc(v.title)} · ${money(v.price)} · ${v.duration} мин · ${v.mode}</option>`).join('')}</select></label><div id="slot-picker"></div><h3 class="reviews-title">Отзывы <span class="muted">(${s.reviews.length})</span></h3>${s.reviews.length?s.reviews.map(r=>`<article class="review"><div><strong>${esc(r.name)}</strong><span class="stars">${'★'.repeat(r.rating)}</span></div><p>${esc(r.content)}</p><small>${date(r.created_at)} · Подтверждённая встреча</small></article>`).join(''):'<p class="muted">У этого специалиста ещё нет опубликованных отзывов.</p>'}`);
- const drawSlots=()=>{
-  const relevant=slots.filter(x=>x.service_id===Number($('#booking-service').value));
-  const days=[...new Set(relevant.map(x=>x.starts_at.slice(0,10)))];
-  $('#slot-picker').innerHTML=days.length?`<div class="date-tabs">${days.map((d,i)=>`<button data-day="${d}" class="${i===0?'selected':''}">${date(d)}<small>${new Date(d).toLocaleDateString('ru-RU',{weekday:'short'})}</small></button>`).join('')}</div><div id="times" class="time-grid"></div><div id="booking-details"></div>`:'<div class="empty compact">Пока нет свободных слотов для этой услуги.</div>';
-  const drawTimes=day=>{
-   $('#booking-details').innerHTML='';
-   $('#times').innerHTML=relevant.filter(x=>x.starts_at.startsWith(day)).map(x=>`<button class="slot" data-slot="${x.id}" ${x.remaining<1?'disabled':''}>${time(x.starts_at)}<small>${x.remaining ? (x.capacity>1?`${x.remaining} из ${x.capacity} мест`:'Свободно'):'Мест нет'}</small></button>`).join('');
-   $$('[data-slot]').forEach(b=>b.onclick=()=>{ $$('[data-slot]').forEach(x=>x.classList.toggle('selected',x===b));bookingForm(relevant.find(x=>x.id===Number(b.dataset.slot)),s);});
-  };
-  $$('[data-day]').forEach(b=>b.onclick=()=>{$$('[data-day]').forEach(x=>x.classList.toggle('selected',x===b));drawTimes(b.dataset.day);});
-  if(days.length)drawTimes(days[0]);
- };
- $('#booking-service').onchange=drawSlots;drawSlots();
-}
-function bookingForm(slot,s) {
- $('#booking-details').innerHTML=`<form id="book-form" class="booking-form"><div class="booking-summary"><strong>${date(slot.starts_at)}, ${time(slot.starts_at)}</strong><span>${slot.mode} · ${slot.duration} мин</span></div>${slot.capacity>1?`<label class="field">Количество участников<input name="quantity" type="number" min="1" max="${slot.remaining}" value="1" required></label>`:'<input name="quantity" type="hidden" value="1">'}${slot.mode==='Выезд'?'<label class="field">Адрес выезда<input name="address" placeholder="Улица, дом, квартира" minlength="5" maxlength="250" required></label>':''}<label class="field">Комментарий <span class="muted">(необязательно)</span><textarea name="note" maxlength="1000" placeholder="Что важно знать специалисту?"></textarea></label><div class="booking-total"><span>Итого <strong id="total-price">${money(slot.price)}</strong></span><button class="button" ${state.user&&state.user.role!=='client'?'disabled':''}>${state.user?'Подтвердить запись':'Войти и записаться'} →</button></div>${state.user&&state.user.role!=='client'?'<p class="muted">Для записи войдите как клиент.</p>':''}<p class="form-error" role="alert"></p></form>`;
- const form=$('#book-form');
- form.elements.quantity.oninput=()=>$('#total-price').textContent=money(slot.price*Number(form.elements.quantity.value));
- form.onsubmit=async e=>{e.preventDefault(); if(!state.user){login(()=>profile(s.id));return;} const button=$('button',form); button.disabled=true;try {await api('/bookings',{slot_id:slot.id,quantity:Number(form.elements.quantity.value),address:form.elements.address?.value||'',note:form.elements.note.value});closeModal();toast('Вы записаны! Подробности — в личном кабинете.');location.hash='dashboard'; if(location.hash==='#dashboard')await dashboard();}catch(e){$('.form-error',form).textContent=e.message;button.disabled=false;}};
-}
 function login(after=null,register=false) {
  modal(`<span class="eyebrow">ВАШЕ ВРЕМЯ — В ВАШИХ РУКАХ</span><h2>${register?'Создать аккаунт':'Рады видеть вас'}</h2><p class="muted">${register?'Сохраните свои записи, отзывы и историю поиска.':'Войдите, чтобы управлять записями и расписанием.'}</p><form id="login-form">${register?'<label class="field">Ваше имя<input name="name" required minlength="2" maxlength="80" autocomplete="name"></label>':''}<label class="field">Электронная почта<input name="email" type="email" autocomplete="email" required></label><label class="field">Пароль<input name="password" type="password" autocomplete="${register?'new-password':'current-password'}" minlength="8" maxlength="128" required></label><p class="form-error" role="alert"></p><button class="button full">${register?'Зарегистрироваться':'Войти'} →</button></form><button id="auth-switch" class="text-button auth-switch">${register?'Уже есть аккаунт? Войти':'Нет аккаунта? Зарегистрироваться'}</button>${!register?`<div class="demo-access"><span class="eyebrow">ПОПРОБУЙТЕ ДЕМО</span><p>Вымышленные данные, настоящие сценарии</p><div>${[['client','Клиент'],['master','Мастер'],['teacher','Преподаватель'],['admin','Администратор']].map(([k,v])=>`<button data-demo="${k}" class="button outline">${v}</button>`).join('')}</div><small>Общие демо-аккаунты. Не вводите личные данные.</small></div>`:''}`);
  const form=$('#login-form');
@@ -85,6 +72,7 @@ function login(after=null,register=false) {
 }
 function statusLabel(s){return {confirmed:'Предстоит',cancelled:'Отменена',completed:'Завершена'}[s]||s;}
 async function dashboard() {
+ $('#chat').before(chatLauncher);
  if(!state.user){login();return;}
  const user=state.user;
  const data=await api('/dashboard');
@@ -129,13 +117,13 @@ async function dashboard() {
  }
 }
 function reviewForm(booking_id){modal('<h2>Как прошла встреча?</h2><p class="muted">Отзыв появится в профиле после проверки администратором.</p><form id="review-form"><label class="field">Ваша оценка<select name="rating"><option value="5">★★★★★ — Отлично</option><option value="4">★★★★ — Хорошо</option><option value="3">★★★ — Нормально</option><option value="2">★★ — Плохо</option><option value="1">★ — Очень плохо</option></select></label><label class="field">Ваш отзыв<textarea name="content" minlength="5" maxlength="1500" required placeholder="Что вам понравилось? Что можно улучшить?"></textarea></label><p class="form-error" role="alert"></p><button class="button">Отправить отзыв →</button></form>');const form=$('#review-form');form.onsubmit=async e=>{e.preventDefault();try{await api('/reviews',{booking_id,rating:Number(form.elements.rating.value),content:form.elements.content.value});closeModal();toast('Спасибо! Отзыв отправлен на модерацию');await dashboard();}catch(e){$('.form-error',form).textContent=e.message;}};}
-function openChat(){$('#chat').classList.remove('hidden');$('#chat-launch').classList.add('hidden');$('#chat-input').focus();}
+function openChat(){$('#chat').classList.remove('hidden');chatLauncher.classList.add('hidden');$('#chat-input').focus();}
 $('#chat-launch').onclick=openChat;
-$('#chat-close').onclick=()=>{$('#chat').classList.add('hidden');$('#chat-launch').classList.remove('hidden');};
+$('#chat-close').onclick=()=>{$('#chat').classList.add('hidden');chatLauncher.classList.remove('hidden');};
 $('#chat-form').onsubmit=async e=>{e.preventDefault();const input=$('#chat-input'),message=input.value.trim();if(!message)return;const list=$('#chat-messages');list.insertAdjacentHTML('beforeend',`<div class="bubble user">${esc(message)}</div>`);input.value='';const button=$('button',$('#chat-form'));button.disabled=true;try{const r=await api('/consult',{message});list.insertAdjacentHTML('beforeend',`<div class="bubble">${esc(r.reply)}${r.specialist_id?`<button class="button pale" data-profile="${r.specialist_id}">Посмотреть специалиста ↗</button>`:''}</div>`);bindProfiles(list);}catch(e){list.insertAdjacentHTML('beforeend',`<div class="bubble">${esc(e.message)}. Попробуйте ещё раз.</div>`);}finally{button.disabled=false;list.scrollTop=list.scrollHeight;}};
 $('#modal-close').onclick=closeModal;
 $('#modal').onclick=e=>{if(e.target===$('#modal')){const r=$('#modal').getBoundingClientRect();if(e.clientX<r.left||e.clientX>r.right||e.clientY<r.top||e.clientY>r.bottom)closeModal();}};
 $('#account').onclick=()=>{if(state.user){location.hash='dashboard';dashboard().catch(e=>toast(e.message));}else login();};
-async function route(){const id=++catalogRequest;try{if(location.hash==='#dashboard'){await dashboard();}else{await refreshCatalog();if(id!==catalogRequest)return;catalog();if(location.hash==='#how')$('#how-section').scrollIntoView({behavior:'smooth'});}$$('[data-nav]').forEach(a=>a.classList.toggle('active',a.getAttribute('href')===(location.hash||'#catalog')));}catch(e){toast(e.message);}}
+async function route(){const id=++catalogRequest;try{if(location.hash==='#dashboard'){await dashboard();}else{await refreshCatalog();if(id!==catalogRequest)return;catalog();if(location.hash==='#how')$('#how-section').scrollIntoView({behavior:'smooth'});}$$('[data-nav]').forEach(a=>a.classList.toggle('active',a.getAttribute('href')===(location.hash||'#catalog')));}catch(e){$('#chat').before(chatLauncher);$('#app').innerHTML=`<div class="empty" role="alert"><h2>Не удалось загрузить страницу</h2><p>${esc(e.message)}</p><button id="retry-page" class="button">Повторить загрузку</button></div>`;$('#retry-page').onclick=route;}}
 window.addEventListener('hashchange',route);
 (async()=>{try{const s=await api('/session');state.user=s.user;state.csrf=s.csrf;updateAccount();await route();}catch(e){$('#app').innerHTML=`<div class="empty"><h2>Не удалось загрузить приложение</h2><p>${esc(e.message)}</p><button class="button" onclick="location.reload()">Повторить</button></div>`;}})();

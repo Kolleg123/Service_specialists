@@ -10,7 +10,7 @@ PHOTOS = [
     ('4.jpg', 'photo-1438761681033-6461ffad8d80'),
     ('5.jpg', 'photo-1519085360753-af0119f7cbe7'),
     ('6.jpg', 'photo-1494790108377-be9c29b29330'),
-    ('hero.jpg', 'photo-1600210492486-724fe5c67fb0'),
+    ('hero.jpg', 'https://raw.githubusercontent.com/codewithsadee/barber/master/assets/images/hero-banner.jpg'),
 ]
 
 
@@ -24,7 +24,7 @@ def main():
             print(f'{name}: already present')
             continue
         width = 1000 if name == 'hero.jpg' else 700
-        url = f'https://images.unsplash.com/{source}?fm=jpg&fit=crop&w={width}&q=85'
+        url = source if source.startswith('https://') else f'https://images.unsplash.com/{source}?fm=jpg&fit=crop&w={width}&q=85'
         try:
             with urllib.request.urlopen(url, timeout=30) as response:
                 data = response.read()
