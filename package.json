@@ -4,7 +4,10 @@
   "version": "1.0.0",
   "scripts": {
     "test:e2e": "playwright test",
-    "check": "node --check static/app.js"
+    "check": "node --check static/app.js && node --check static/booking.js",
+    "design:capture": "CAPTURE_DESIGN=1 playwright test tests/browser/design.spec.js"
   },
-  "devDependencies": { "@playwright/test": "1.56.1" }
+  "devDependencies": {
+    "@playwright/test": "1.56.1"
+  }
 }

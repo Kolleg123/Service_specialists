@@ -9,6 +9,7 @@ from zoneinfo import ZoneInfo
 
 from flask import Flask, jsonify, request, session, send_from_directory
 from werkzeug.security import generate_password_hash, check_password_hash
+from booking_service import BookingError, available_slots, create_booking
 
 TZ = ZoneInfo('Europe/Kirov')
 CATEGORIES = ['Все специалисты', 'Дом и ремонт', 'Красота', 'Обучение', 'Здоровье', 'Мероприятия']
@@ -135,39 +136,26 @@ def create_app(test_config=None):
 
     @app.get('/api/slots/<int:specialist_id>')
     def slots(specialist_id):
+        service_id = request.args.get('service_id')
+        if service_id is not None:
+            try:
+                service_id = int(service_id)
+                if service_id < 1:
+                    raise ValueError
+            except ValueError:
+                return fail('Укажите корректную услугу')
         with db() as c:
-            rows = c.execute('''SELECT s.*,v.title service,v.duration,v.price,v.mode,
-                s.capacity-COALESCE((SELECT SUM(b.quantity) FROM bookings b WHERE b.slot_id=s.id AND b.status='confirmed'),0) remaining
-                FROM slots s JOIN services v ON s.service_id=v.id JOIN specialists p ON p.id=s.specialist_id
-                WHERE s.specialist_id=? AND s.active=1 AND v.active=1 AND p.active=1 AND s.starts_at>?
-                ORDER BY s.starts_at''', (specialist_id, now().isoformat(timespec='minutes'))).fetchall()
-        return jsonify(slots=[dict(r) for r in rows])
+            rows = available_slots(c, specialist_id, now(), service_id)
+        return jsonify(slots=rows)
 
     @app.post('/api/bookings')
     @auth('client')
     def book(user):
-        d = request.get_json()
-        qty = d.get('quantity', 1)
-        if type(qty) is not int or not 1 <= qty <= 50:
-            return fail('Количество мест должно быть от 1 до 50')
-        address, note = str(d.get('address', '')).strip(), str(d.get('note', '')).strip()
-        if len(address) > 250 or len(note) > 1000:
-            return fail('Слишком длинный адрес или комментарий')
-        with db() as c:
-            c.execute('BEGIN IMMEDIATE')
-            slot = c.execute('''SELECT s.*,v.mode,v.price,v.active service_active,p.active specialist_active
-                              FROM slots s JOIN services v ON v.id=s.service_id JOIN specialists p ON p.id=s.specialist_id WHERE s.id=?''', (d.get('slot_id'),)).fetchone()
-            if not slot or not slot['active'] or not slot['service_active'] or not slot['specialist_active'] or slot['starts_at'] <= now().isoformat(timespec='minutes'):
-                return fail('Это время больше недоступно', 409)
-            if slot['mode'] == 'Выезд' and len(address) < 5:
-                return fail('Укажите адрес выезда специалиста')
-            used = c.execute('SELECT COALESCE(SUM(quantity),0) FROM bookings WHERE slot_id=? AND status="confirmed"', (slot['id'],)).fetchone()[0]
-            if used + qty > slot['capacity']:
-                return fail('Недостаточно свободных мест. Выберите другой слот.', 409)
-            if c.execute('SELECT id FROM bookings WHERE slot_id=? AND user_id=? AND status="confirmed"', (slot['id'], user['id'])).fetchone():
-                return fail('Вы уже записаны на это время', 409)
-            ident = c.execute('INSERT INTO bookings(user_id,slot_id,quantity,address,note,status,created_at,total) VALUES(?,?,?,?,?,"confirmed",?,?)',
-                              (user['id'], slot['id'], qty, address, note, now().isoformat(timespec='minutes'), slot['price'] * qty)).lastrowid
+        try:
+            with db() as c:
+                ident = create_booking(c, user['id'], request.get_json(), now())
+        except BookingError as error:
+            return fail(str(error), error.status)
         return jsonify(id=ident), 201
 
     @app.get('/api/dashboard')

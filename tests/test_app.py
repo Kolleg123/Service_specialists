@@ -154,3 +154,86 @@ def test_invalid_quantity(app, qty):
     c = client(app)
     slot = c.get('/api/slots/4').json['slots'][0]
     assert post(c, '/bookings', {'slot_id': slot['id'], 'quantity': qty}).status_code == 400
+
+
+def test_service_change_returns_only_matching_slots_and_rejects_stale_choice(app):
+    c = client(app)
+    original = c.get('/api/slots/1?service_id=1').json['slots']
+    changed = c.get('/api/slots/1?service_id=2').json['slots']
+    assert original and changed
+    assert {s['service_id'] for s in original} == {1}
+    assert {s['service_id'] for s in changed} == {2}
+    assert {s['duration'] for s in original} == {60}
+    assert {s['duration'] for s in changed} == {90}
+    assert not {s['id'] for s in original} & {s['id'] for s in changed}
+    r = post(c, '/bookings', {'slot_id': original[0]['id'], 'service_id': 2, 'address': 'Киров, Ленина 10'})
+    assert r.status_code == 409 and 'Услуга изменилась' in r.json['error']
+    # Optional filtering preserves the old endpoint and JSON object shape.
+    assert len(c.get('/api/slots/1').json['slots']) == len(original) + len(changed)
+    assert c.get('/api/slots/1?service_id=broken').status_code == 400
+    assert c.get('/api/slots/1?service_id=7').json == {'slots': []}
+
+
+def test_duration_recalculation_excludes_overlapping_booked_interval(app):
+    c = client(app)
+    slots = c.get('/api/slots/1').json['slots']
+    early = next(s for s in slots if s['service_id'] == 1)
+    later = next(s for s in slots if s['service_id'] == 2)
+    assert post(c, '/bookings', {'slot_id': later['id'], 'address': 'Киров, Ленина 10'}).status_code == 201
+    # A duration update/import makes the 10:00 slot extend beyond the 14:00 booking.
+    with sqlite3.connect(app.config['DATABASE']) as con:
+        con.execute('UPDATE services SET duration=300 WHERE id=1')
+    available = c.get('/api/slots/1?service_id=1').json['slots']
+    assert next(s for s in available if s['id'] == early['id'])['remaining'] == 0
+    r = post(c, '/bookings', {'slot_id': early['id'], 'address': 'Киров, Ленина 10'})
+    assert r.status_code == 409 and 'интервале' in r.json['error']
+
+
+@pytest.mark.parametrize('change', ['closed', 'past', 'invalid-date', 'hidden-service'])
+def test_unavailable_slot_changes_after_selection(app, change):
+    c = client(app)
+    slot = c.get('/api/slots/1').json['slots'][0]
+    with sqlite3.connect(app.config['DATABASE']) as con:
+        if change == 'closed':
+            con.execute('UPDATE slots SET active=0 WHERE id=?', (slot['id'],))
+        elif change == 'hidden-service':
+            con.execute('UPDATE services SET active=0 WHERE id=?', (slot['service_id'],))
+        else:
+            start = 'not-a-date' if change == 'invalid-date' else (now()-timedelta(days=1)).isoformat(timespec='minutes')
+            con.execute('UPDATE slots SET starts_at=? WHERE id=?', (start, slot['id']))
+    r = post(c, '/bookings', {'slot_id': slot['id'], 'address': 'Киров, Ленина 10'})
+    assert r.status_code == 409 and isinstance(r.json['error'], str)
+    assert slot['id'] not in [s['id'] for s in c.get('/api/slots/1').json['slots']]
+
+
+def test_concurrent_last_individual_slot_has_exactly_one_winner(app):
+    a, b = client(app), client(app, 'ivan')
+    slot = a.get('/api/slots/1').json['slots'][0]
+    payload = {'slot_id': slot['id'], 'service_id': slot['service_id'], 'address': 'Киров, Ленина 10'}
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(pool.map(lambda c: post(c, '/bookings', payload), [a, b]))
+    assert sorted(r.status_code for r in results) == [201, 409]
+    assert 'занят' in next(r.json['error'] for r in results if r.status_code == 409)
+    assert next(s for s in a.get('/api/slots/1').json['slots'] if s['id'] == slot['id'])['remaining'] == 0
+    with sqlite3.connect(app.config['DATABASE']) as con:
+        assert con.execute('SELECT COUNT(*) FROM bookings WHERE slot_id=?', (slot['id'],)).fetchone()[0] == 1
+
+
+def test_group_excess_does_not_consume_places_and_cancel_restores_them(app):
+    a, b = client(app), client(app, 'ivan')
+    slot = next(s for s in a.get('/api/slots/4').json['slots'] if s['capacity'] == 6)
+    booking = post(a, '/bookings', {'slot_id': slot['id'], 'quantity': 5})
+    assert booking.status_code == 201
+    failure = post(b, '/bookings', {'slot_id': slot['id'], 'quantity': 2})
+    assert failure.status_code == 409 and 'группе' in failure.json['error']
+    assert next(s for s in a.get('/api/slots/4').json['slots'] if s['id'] == slot['id'])['remaining'] == 1
+    assert post(a, f"/bookings/{booking.json['id']}/cancel", {}).status_code == 200
+    assert next(s for s in a.get('/api/slots/4').json['slots'] if s['id'] == slot['id'])['remaining'] == 6
+
+
+@pytest.mark.parametrize('field,value', [('price', 10), ('duration', 15), ('starts_at', '2020-01-01T10:00')])
+def test_confirmation_snapshot_is_checked_atomically(app, field, value):
+    c = client(app)
+    slot = c.get('/api/slots/1').json['slots'][0]
+    r = post(c, '/bookings', {'slot_id': slot['id'], 'address': 'Киров, Ленина 10', field: value})
+    assert r.status_code == 409 and 'Условия записи изменились' in r.json['error']
