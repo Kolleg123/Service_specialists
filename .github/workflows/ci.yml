@@ -1,0 +1,49 @@
+name: CI Checks
+
+on:
+  push:
+    branches: [main, ai_version, final-release]
+  pull_request:
+    branches: [main, ai_version, final-release]
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+
+      - name: Install Python dependencies
+        run: |
+          python -m venv .venv
+          .venv/bin/python -m pip install --upgrade pip
+          .venv/bin/pip install -r requirements.txt
+
+      - name: Run pytest
+        run: .venv/bin/pytest -q
+
+      - name: Set up Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install Node dependencies and Playwright Chromium
+        run: |
+          npm ci
+          npx playwright install --with-deps chromium
+
+      - name: Check JS syntax
+        run: |
+          node --check static/app.js
+          node --check static/booking.js
+
+      - name: Run Playwright E2E tests
+        run: npm run test:e2e
