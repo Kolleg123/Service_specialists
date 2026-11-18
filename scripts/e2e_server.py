@@ -1,9 +1,33 @@
-"""An isolated disposable database for browser tests."""
+"""Isolated browser-test server. The controllable clock is NEVER in app.py."""
 import sys
 import tempfile
+from datetime import datetime
 from pathlib import Path
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from app import create_app
+import app as app_module
+from flask import jsonify, request
+
+real_now = app_module.now
+clock_override = None
+app_module.now = lambda: clock_override if clock_override is not None else real_now()
 
 with tempfile.TemporaryDirectory(prefix='svobodno-e2e-') as folder:
-    create_app({'DATABASE': str(Path(folder) / 'test.sqlite')}).run(host='127.0.0.1', port=5051)
+    app = app_module.create_app({'DATABASE': str(Path(folder) / 'test.sqlite'), 'TESTING': True})
+
+    @app.post('/__test__/clock')
+    def test_clock():
+        # Test-only fixture route on a loopback server with a disposable database.
+        # Existing CSRF middleware still applies; no route is added to create_app.
+        global clock_override
+        value = request.get_json().get('now')
+        try:
+            parsed = datetime.fromisoformat(value) if value is not None else None
+            if parsed is not None and parsed.tzinfo is not None:
+                raise ValueError
+        except (ValueError, TypeError):
+            return jsonify(error='Expected a naive ISO datetime or null'), 400
+        clock_override = parsed
+        return jsonify(ok=True)
+
+    app.run(host='127.0.0.1', port=5051)

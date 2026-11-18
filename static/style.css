@@ -108,3 +108,19 @@ body > .chat-launch { width: calc(100% - 48px); max-width: 1232px; margin: 20px 
   #booking-flow:not([data-step="1"]) .profile-head .eyebrow { font-size: 8px; }
   .confirmation-summary { gap: 12px; }
 }
+
+/* The server owns booking states and available actions for every role. */
+.booking-actions { max-width: 280px; min-width: 160px; }
+.action-reason { font-size: 11px; line-height: 1.55; color: #68776c; text-align: right; }
+.badge.in_progress { background: #e5eefb; color: #2f5978; }
+.badge.awaiting_completion { background: #fbf0d9; color: #806321; }
+.dashboard-update { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; margin: -6px 0 20px; }
+.dashboard-update p { font-size: 11px; color: #68776c; }
+.dashboard-update .button { margin-left: auto; font-size: 11px; }
+#dashboard-update-status { flex-basis: 100%; }
+#dashboard-update-status:empty { display: none; }
+@media(max-width:560px) {
+ .booking-actions { max-width: none; min-width: 0; flex-wrap: wrap; }
+ .action-reason { flex-basis: 100%; text-align: left; }
+ .dashboard-update .button { margin-left: 0; }
+}

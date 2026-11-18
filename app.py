@@ -10,6 +10,7 @@ from zoneinfo import ZoneInfo
 from flask import Flask, jsonify, request, session, send_from_directory
 from werkzeug.security import generate_password_hash, check_password_hash
 from booking_service import BookingError, available_slots, create_booking
+from booking_lifecycle import booking_interval, booking_policy, transition_booking
 
 TZ = ZoneInfo('Europe/Kirov')
 CATEGORIES = ['Все специалисты', 'Дом и ремонт', 'Красота', 'Обучение', 'Здоровье', 'Мероприятия']
@@ -168,34 +169,29 @@ def create_app(test_config=None):
                 JOIN specialists p ON p.id=s.specialist_id JOIN users u ON u.id=b.user_id WHERE {where} ORDER BY s.starts_at DESC''', params).fetchall()
             searches = c.execute('SELECT * FROM searches WHERE user_id=? ORDER BY id DESC LIMIT 30', (user['id'],)).fetchall()
             reviews = c.execute('SELECT r.*,p.name specialist,u.name author FROM reviews r JOIN specialists p ON p.id=r.specialist_id JOIN users u ON u.id=r.user_id ' + ('' if user['role'] == 'admin' else 'WHERE r.user_id=? ') + 'ORDER BY r.id DESC', () if user['role'] == 'admin' else (user['id'],)).fetchall()
-        return jsonify(bookings=[dict(r) for r in bookings], searches=[dict(r) for r in searches], reviews=[dict(r) for r in reviews])
+        current_time = now()
+        reviewed_ids = {r['booking_id'] for r in reviews}
+        rows = [{**dict(b), **booking_policy(b, user, current_time, b['id'] in reviewed_ids)} for b in bookings]
+        return jsonify(bookings=rows, searches=[dict(r) for r in searches], reviews=[dict(r) for r in reviews],
+                       server_now=current_time.isoformat(timespec='seconds'))
+
+    def apply_booking_transition(user, ident, action):
+        try:
+            with db() as c:
+                transition_booking(c, user, ident, action, now)
+        except BookingError as error:
+            return fail(str(error), error.status)
+        return jsonify(ok=True)
 
     @app.post('/api/bookings/<int:ident>/cancel')
     @auth()
     def cancel(user, ident):
-        with db() as c:
-            c.execute('BEGIN IMMEDIATE')
-            b = c.execute('SELECT b.*,s.specialist_id,s.starts_at FROM bookings b JOIN slots s ON s.id=b.slot_id WHERE b.id=?', (ident,)).fetchone()
-            if not b:
-                return fail('Запись не найдена', 404)
-            if not (user['role'] == 'admin' or user['role'] == 'client' and b['user_id'] == user['id'] or user['role'] == 'master' and b['specialist_id'] == user['specialist_id']):
-                return fail('Недостаточно прав', 403)
-            if b['status'] != 'confirmed' or b['starts_at'] <= now().isoformat(timespec='minutes'):
-                return fail('Можно отменить только предстоящую активную запись', 409)
-            c.execute('UPDATE bookings SET status="cancelled" WHERE id=?', (ident,))
-        return jsonify(ok=True)
+        return apply_booking_transition(user, ident, 'cancel')
 
     @app.post('/api/bookings/<int:ident>/complete')
     @auth('master')
     def complete(user, ident):
-        with db() as c:
-            b = c.execute('SELECT b.*,s.specialist_id,s.starts_at FROM bookings b JOIN slots s ON s.id=b.slot_id WHERE b.id=?', (ident,)).fetchone()
-            if not b or b['specialist_id'] != user['specialist_id']:
-                return fail('Запись не найдена', 404)
-            if b['status'] != 'confirmed' or b['starts_at'] > now().isoformat(timespec='minutes'):
-                return fail('Завершить можно только начавшуюся встречу', 409)
-            c.execute('UPDATE bookings SET status="completed" WHERE id=?', (ident,))
-        return jsonify(ok=True)
+        return apply_booking_transition(user, ident, 'complete')
 
     @app.post('/api/reviews')
     @auth('client')
@@ -205,9 +201,12 @@ def create_app(test_config=None):
         if type(rating) is not int or not 1 <= rating <= 5 or not 5 <= len(content) <= 1500:
             return fail('Оцените от 1 до 5 и напишите отзыв от 5 до 1500 символов')
         with db() as c:
-            b = c.execute('SELECT b.*,s.specialist_id FROM bookings b JOIN slots s ON s.id=b.slot_id WHERE b.id=? AND b.user_id=? AND b.status="completed"', (d.get('booking_id'), user['id'])).fetchone()
+            c.execute('BEGIN IMMEDIATE')
+            b = c.execute('SELECT b.*,s.specialist_id,s.starts_at,v.duration FROM bookings b JOIN slots s ON s.id=b.slot_id JOIN services v ON v.id=s.service_id WHERE b.id=? AND b.user_id=? AND b.status="completed"', (d.get('booking_id'), user['id'])).fetchone()
             if not b:
                 return fail('Отзыв доступен после завершённой встречи', 403)
+            if now() < booking_interval(b)[1]:
+                return fail('Отзыв недоступен до окончания услуги', 403)
             try:
                 c.execute('INSERT INTO reviews(user_id,specialist_id,booking_id,rating,content,status,created_at) VALUES(?,?,?,?,?,"pending",?)', (user['id'], b['specialist_id'], b['id'], rating, content, now().date().isoformat()))
             except sqlite3.IntegrityError:
@@ -239,9 +238,9 @@ def create_app(test_config=None):
         for words, ident, reply in rules:
             if any(w in message for w in words):
                 with db() as c:
-                    active = c.execute('SELECT active FROM specialists WHERE id=?', (ident,)).fetchone()
+                    active = c.execute('SELECT p.id,p.active FROM seed_entities e JOIN specialists p ON p.id=e.entity_id WHERE e.seed_key=?', (f'specialist:{ident}',)).fetchone()
                 if active and active['active']:
-                    return jsonify(reply=reply, specialist_id=ident)
+                    return jsonify(reply=reply, specialist_id=active['id'])
                 return jsonify(reply='Специалист этой категории сейчас недоступен. Попробуйте поискать в каталоге позже.', specialist_id=None)
         return jsonify(reply='Расскажите чуть подробнее: нужна помощь с ремонтом дома, стрижкой, английским, массажем или фотографией? Я подберу категорию и предложу специалиста.', specialist_id=None)
 
@@ -335,46 +334,9 @@ def create_app(test_config=None):
 
 
 def init_db(app, db):
-    with db() as c:
-        c.executescript('''
-        CREATE TABLE IF NOT EXISTS specialists(id INTEGER PRIMARY KEY,name TEXT,profession TEXT,category TEXT,experience INTEGER,education TEXT,skills TEXT,bio TEXT,photo TEXT,location TEXT,active INTEGER DEFAULT 1);
-        CREATE TABLE IF NOT EXISTS users(id INTEGER PRIMARY KEY,name TEXT,email TEXT UNIQUE,password TEXT,role TEXT,specialist_id INTEGER REFERENCES specialists(id));
-        CREATE TABLE IF NOT EXISTS services(id INTEGER PRIMARY KEY,specialist_id INTEGER REFERENCES specialists(id),title TEXT,price INTEGER,duration INTEGER,mode TEXT,active INTEGER DEFAULT 1);
-        CREATE TABLE IF NOT EXISTS slots(id INTEGER PRIMARY KEY,specialist_id INTEGER REFERENCES specialists(id),service_id INTEGER REFERENCES services(id),starts_at TEXT,capacity INTEGER CHECK(capacity>0),active INTEGER DEFAULT 1);
-        CREATE TABLE IF NOT EXISTS bookings(id INTEGER PRIMARY KEY,user_id INTEGER REFERENCES users(id),slot_id INTEGER REFERENCES slots(id),quantity INTEGER CHECK(quantity>0),address TEXT,note TEXT,status TEXT,created_at TEXT,total INTEGER);
-        CREATE TABLE IF NOT EXISTS reviews(id INTEGER PRIMARY KEY,user_id INTEGER REFERENCES users(id),specialist_id INTEGER REFERENCES specialists(id),booking_id INTEGER UNIQUE REFERENCES bookings(id),rating INTEGER CHECK(rating BETWEEN 1 AND 5),content TEXT,status TEXT,created_at TEXT);
-        CREATE TABLE IF NOT EXISTS searches(id INTEGER PRIMARY KEY,user_id INTEGER REFERENCES users(id),query TEXT,created_at TEXT);
-        CREATE INDEX IF NOT EXISTS booking_slot ON bookings(slot_id,status);
-        CREATE INDEX IF NOT EXISTS slot_specialist ON slots(specialist_id,starts_at);
-        ''')
-        if c.execute('SELECT COUNT(*) FROM specialists').fetchone()[0]:
-            return
-        people = [
-            ('Алексей Морозов', 'Сантехник', 'Дом и ремонт', 12, 'Колледж архитектуры и строительства, инженерные системы', 'Сантехника,Поиск протечек,Монтаж оборудования', 'Помогу вернуть дому комфорт. Аккуратно устраняю протечки, устанавливаю сантехнику и всегда объясняю, что и зачем делаю.', 'photo-1500648767791-00dcc994a43e', 'Киров · выезд по городу'),
-            ('Михаил Волков', 'Электрик', 'Дом и ремонт', 9, 'ВятГУ, электроэнергетика', 'Электромонтаж,Диагностика,Умный дом', 'От одной розетки до домашнего освещения. Работаю внимательно и оставляю после себя порядок.', 'photo-1560250097-0b93528c311a', 'Киров · выезд по городу'),
-            ('Мария Соколова', 'Стилист по волосам', 'Красота', 7, 'Академия парикмахерского искусства, колористика', 'Стрижки,Укладки,Уход за волосами', 'Нахожу форму и стиль, которые подходят именно вам. Спокойная атмосфера, внимание к деталям и вашим пожеланиям.', 'photo-1580489944761-15a19d654956', 'Киров · ул. Ленина, 54'),
-            ('Анна Лебедева', 'Преподаватель английского', 'Обучение', 8, 'ВятГУ, лингвистика; сертификат CELTA', 'Разговорный английский,Подготовка к экзаменам,Speaking club', 'Помогаю заговорить уверенно. Живые темы, понятные объяснения и занятия в вашем темпе — онлайн и в небольших группах.', 'photo-1438761681033-6461ffad8d80', 'Онлайн · Киров'),
-            ('Дмитрий Орлов', 'Массажист', 'Здоровье', 6, 'Кировский медицинский колледж, курсы оздоровительного массажа', 'Расслабляющий массаж,Восстановление,Забота о теле', 'Бережный оздоровительный массаж для отдыха после насыщенной недели. При медицинских жалобах рекомендую консультацию врача.', 'photo-1519085360753-af0119f7cbe7', 'Киров · ул. Карла Маркса, 18'),
-            ('Елена Павлова', 'Фотограф', 'Мероприятия', 10, 'Школа фотографии, портрет и композиция', 'Портреты,Семейные съёмки,Мастер-классы', 'Сохраняю настоящие эмоции в кадре и учу видеть красоту в повседневном. Приглашаю на съёмки и практические мастер-классы.', 'photo-1494790108377-be9c29b29330', 'Киров · студия «Свет»')]
-        for i, p in enumerate(people, 1):
-            c.execute('INSERT INTO specialists(id,name,profession,category,experience,education,skills,bio,photo,location) VALUES(?,?,?,?,?,?,?,?,?,?)', (i, *p[:7], '/static/photos/' + str(i) + '.jpg', p[8]))
-        for name, email, role, sid in [('Александра Смирнова', 'client@svobodno.demo', 'client', None), ('Алексей Морозов', 'master@svobodno.demo', 'master', 1), ('Администратор', 'admin@svobodno.demo', 'admin', None), ('Анна Лебедева', 'teacher@svobodno.demo', 'master', 4), ('Иван Петров', 'ivan@svobodno.demo', 'client', None)]:
-            c.execute('INSERT INTO users(name,email,password,role,specialist_id) VALUES(?,?,?,?,?)', (name, email, generate_password_hash('Demo2026!'), role, sid))
-        services = [(1, 'Устранение протечки', 1500, 60, 'Выезд'), (1, 'Установка смесителя', 2200, 90, 'Выезд'), (2, 'Диагностика электрики', 1800, 60, 'Выезд'), (2, 'Установка розетки', 1200, 60, 'Выезд'), (3, 'Стрижка и укладка', 2500, 90, 'У специалиста'), (3, 'Вечерняя укладка', 2000, 60, 'У специалиста'), (4, 'Английский индивидуально', 1600, 60, 'Онлайн'), (4, 'Разговорный клуб', 700, 90, 'Группа'), (5, 'Расслабляющий массаж', 2800, 60, 'У специалиста'), (6, 'Портретная фотосессия', 5000, 60, 'У специалиста'), (6, 'Мастер-класс по фотографии', 1200, 120, 'Группа')]
-        c.executemany('INSERT INTO services(specialist_id,title,price,duration,mode) VALUES(?,?,?,?,?)', services)
-        for service in c.execute('SELECT * FROM services').fetchall():
-            # Each specialist's different services occupy separate times.
-            hour = 10 if service['id'] in [1, 3, 5, 7, 9, 10] else 14
-            for day in range(1, 15):
-                start = (now() + timedelta(days=day)).replace(hour=hour, minute=0, second=0, microsecond=0)
-                c.execute('INSERT INTO slots(specialist_id,service_id,starts_at,capacity) VALUES(?,?,?,?)', (service['specialist_id'], service['id'], start.isoformat(timespec='minutes'), 6 if service['mode'] == 'Группа' else 1))
-        for sid, service_id in [(1, 1), (3, 5), (4, 7), (5, 9), (6, 10), (2, 3)]:
-            start = (now() - timedelta(days=7)).replace(hour=10, minute=0).isoformat(timespec='minutes')
-            slot_id = c.execute('INSERT INTO slots(specialist_id,service_id,starts_at,capacity) VALUES(?,?,?,1)', (sid, service_id, start)).lastrowid
-            booking_id = c.execute('INSERT INTO bookings(user_id,slot_id,quantity,address,note,status,created_at,total) VALUES(?,?,1,?,?,"completed",?,?)', (1 if sid == 1 else 5, slot_id, 'Киров, ул. Московская, 10', 'Демонстрационная завершённая запись', start, services[service_id-1][2])).lastrowid
-            if sid != 1:
-                c.execute('INSERT INTO reviews(user_id,specialist_id,booking_id,rating,content,status,created_at) VALUES(?,?,?,?,?,"approved",?)', (5, sid, booking_id, 5, 'Всё прошло отлично! Внимательное отношение, пунктуальность и отличный результат. Рекомендую.', start[:10]))
-        c.execute('INSERT INTO searches(user_id,query,created_at) VALUES(1,?,?)', ('Сантехник', now().isoformat(timespec='minutes')))
+    from seed_data import initialize_database
+    with db() as connection:
+        initialize_database(connection, now())
 
 
 if __name__ == '__main__':

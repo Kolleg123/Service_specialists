@@ -9,6 +9,9 @@ const localNow = () => new Date().toLocaleString('sv-SE', {timeZone:'Europe/Kiro
 const icons = {'Все специалисты':'✧','Дом и ремонт':'⌂','Красота':'✂','Обучение':'▤','Здоровье':'♡','Мероприятия':'◎'};
 let state = {user:null, csrf:'', specialists:[], categories:[], category:'Все специалисты', query:'', sort:'recommended', maxPrice:'', mode:''};
 let dashboardTab = 'bookings';
+let dashboardStatusFilter = 'all';
+let dashboardRefreshTimer;
+let dashboardRequest = 0;
 let catalogRequest = 0;
 const chatLauncher = $('#chat-launch');
 async function api(path, data) {
@@ -70,28 +73,51 @@ function login(after=null,register=false) {
  $$('[data-demo]').forEach(b=>b.onclick=()=>submit({email:b.dataset.demo+'@svobodno.demo',password:'Demo2026!'}));
  $('#auth-switch').onclick=()=>login(after,!register);
 }
-function statusLabel(s){return {confirmed:'Предстоит',cancelled:'Отменена',completed:'Завершена'}[s]||s;}
+function bookingActions(booking) {
+ const buttons = [];
+ if (booking.actions.cancel) buttons.push(`<button data-cancel="${booking.id}" class="text-button danger">Отменить запись</button>`);
+ if (booking.actions.complete) buttons.push(`<button class="button pale" data-complete="${booking.id}">Завершить встречу</button>`);
+ if (booking.actions.review) buttons.push(`<button data-review="${booking.id}" class="button pale">Оставить отзыв</button>`);
+ const reasons = Object.values(booking.action_reasons).map(reason => `<p class="action-reason">${esc(reason)}</p>`).join('');
+ return `<strong>${money(booking.total)}</strong>${buttons.join('')}${reasons}`;
+}
+function scheduleDashboardRefresh() {
+ clearTimeout(dashboardRefreshTimer);
+ dashboardRefreshTimer = setTimeout(async () => {
+  if (location.hash !== '#dashboard' || dashboardTab !== 'bookings' || !state.user) return;
+  // Do not destroy an open dialog, filter selection or keyboard focus.
+  if (document.hidden || $('#modal').open || $('.dashboard')?.contains(document.activeElement)) {
+   scheduleDashboardRefresh(); return;
+  }
+  try { await dashboard(); } catch (error) { toast(error.message); scheduleDashboardRefresh(); }
+ }, 30000);
+}
 async function dashboard() {
+ const requestId = ++dashboardRequest;
+ clearTimeout(dashboardRefreshTimer);
  $('#chat').before(chatLauncher);
  if(!state.user){login();return;}
  const user=state.user;
  const data=await api('/dashboard');
+ if (requestId !== dashboardRequest || state.user !== user || location.hash !== '#dashboard') return;
  const isClient=user.role==='client', isMaster=user.role==='master', isAdmin=user.role==='admin';
  const tabs=isClient?[['bookings','Мои записи'],['searches','История поиска'],['reviews','Мои отзывы']]:isMaster?[['bookings','Записи клиентов'],['schedule','Моё расписание'],['services','Мои услуги']]:[['bookings','Все записи'],['moderation','Модерация отзывов'],['people','Специалисты и услуги']];
  if(!tabs.some(x=>x[0]===dashboardTab))dashboardTab='bookings';
- $('#app').innerHTML=`<section class="dashboard"><div class="dashboard-heading"><div><span class="eyebrow">${isClient?'ЛИЧНЫЙ КАБИНЕТ':isMaster?'КАБИНЕТ СПЕЦИАЛИСТА':'АДМИНИСТРИРОВАНИЕ'}</span><h1>Здравствуйте, ${esc(user.name.split(' ')[0])}<span class="wave">✧</span></h1><p class="muted">${isClient?'Встречи, которые делают жизнь проще.':isMaster?'Ваше время, ваши услуги и ваши клиенты.':'Управляйте качеством сервиса и публикациями.'}</p></div><button id="logout" class="button outline">Выйти ↗</button></div><div class="stats"><div><span>${isClient?'Предстоящих встреч':'Активных записей'}</span><strong>${data.bookings.filter(b=>b.status==='confirmed'&&b.starts_at>localNow()).length}</strong></div><div><span>Завершённых встреч</span><strong>${data.bookings.filter(b=>b.status==='completed').length}</strong></div><div><span>${isAdmin?'На модерации':'Всего записей'}</span><strong>${isAdmin?data.reviews.filter(r=>r.status==='pending').length:data.bookings.length}</strong></div></div><div class="dashboard-tabs">${tabs.map(([id,t])=>`<button data-tab="${id}" class="${dashboardTab===id?'selected':''}">${t}</button>`).join('')}</div><div id="dashboard-content"></div></section>`;
- $('#logout').onclick=async()=>{const r=await api('/logout',{});state.user=null;state.csrf=r.csrf;dashboardTab='bookings';updateAccount();location.hash='catalog';catalog();};
+ $('#app').innerHTML=`<section class="dashboard"><div class="dashboard-heading"><div><span class="eyebrow">${isClient?'ЛИЧНЫЙ КАБИНЕТ':isMaster?'КАБИНЕТ СПЕЦИАЛИСТА':'АДМИНИСТРИРОВАНИЕ'}</span><h1>Здравствуйте, ${esc(user.name.split(' ')[0])}<span class="wave">✧</span></h1><p class="muted">${isClient?'Встречи, которые делают жизнь проще.':isMaster?'Ваше время, ваши услуги и ваши клиенты.':'Управляйте качеством сервиса и публикациями.'}</p></div><button id="logout" class="button outline">Выйти ↗</button></div><div class="stats"><div><span>${isClient?'Предстоящих встреч':'Активных записей'}</span><strong>${data.bookings.filter(b=>isClient?b.phase==='upcoming':b.status==='confirmed').length}</strong></div><div><span>Завершённых встреч</span><strong>${data.bookings.filter(b=>b.status==='completed').length}</strong></div><div><span>${isAdmin?'На модерации':'Всего записей'}</span><strong>${isAdmin?data.reviews.filter(r=>r.status==='pending').length:data.bookings.length}</strong></div></div><div class="dashboard-tabs">${tabs.map(([id,t])=>`<button data-tab="${id}" class="${dashboardTab===id?'selected':''}">${t}</button>`).join('')}</div><div id="dashboard-content"></div></section>`;
+ $('#logout').onclick=async()=>{const r=await api('/logout',{});state.user=null;state.csrf=r.csrf;dashboardTab='bookings';dashboardStatusFilter='all';clearTimeout(dashboardRefreshTimer);updateAccount();location.hash='catalog';catalog();};
  $$('[data-tab]').forEach(b=>b.onclick=()=>{dashboardTab=b.dataset.tab;dashboard().catch(e=>toast(e.message));});
  const root=$('#dashboard-content');
  if(dashboardTab==='bookings'){
-  root.innerHTML=`<div class="section-title"><h2>${isClient?'Мои встречи':'История записей'}</h2><select id="booking-status" aria-label="Статус записи"><option value="all">Все записи</option><option value="confirmed">Активные</option><option value="completed">Завершённые</option><option value="cancelled">Отменённые</option></select></div><div id="booking-list"></div>`;
+  root.innerHTML=`<div class="section-title"><h2>${isClient?'Мои встречи':'История записей'}</h2><select id="booking-status" aria-label="Статус записи"><option value="all">Все записи</option><option value="confirmed">Активные</option><option value="completed">Завершённые</option><option value="cancelled">Отменённые</option></select></div><div class="dashboard-update"><p>Время Кирова · UTC+3. Статус и действия проверяет сервер.</p><button id="refresh-bookings" class="button outline">Обновить статусы</button><p id="dashboard-update-status" role="status"></p></div><div id="booking-list"></div>`;
+  $('#booking-status').value=dashboardStatusFilter;
+  $('#refresh-bookings').onclick=async()=>{try{await dashboard();$('#dashboard-update-status').textContent='Статусы обновлены';$('#refresh-bookings').focus();}catch(error){toast(error.message);}};
   const draw=()=>{
    const rows=data.bookings.filter(b=>$('#booking-status').value==='all'||b.status===$('#booking-status').value);
-   $('#booking-list').innerHTML=rows.length?rows.map(b=>`<article class="booking-row"><img src="${esc(b.photo)}" alt=""><div class="booking-info"><span class="badge ${b.status}">${b.status==='confirmed'&&b.starts_at<=localNow()?'Ожидает завершения':statusLabel(b.status)}</span><h3>${esc(b.service)}</h3><p>${esc(b.specialist)}${!isClient?' · Клиент: '+esc(b.client):''}</p><p><b>${date(b.starts_at)} · ${time(b.starts_at)}</b> · ${b.mode} · ${b.quantity} мест(о)</p>${b.address?`<p>⌖ ${esc(b.address)}</p>`:''}${b.note?`<p class="muted">${esc(b.note)}</p>`:''}</div><div class="booking-actions"><strong>${money(b.total)}</strong>${b.status==='confirmed'&&b.starts_at>localNow()?`<button data-cancel="${b.id}" class="text-button danger">Отменить запись</button>`:''}${isMaster&&b.status==='confirmed'&&b.starts_at<=localNow()?`<button class="button pale" data-complete="${b.id}">Завершить встречу</button>`:''}${isClient&&b.status==='completed'&&!data.reviews.some(r=>r.booking_id===b.id)?`<button data-review="${b.id}" class="button pale">Оставить отзыв</button>`:''}</div></article>`).join(''):'<div class="empty"><span>▦</span><h3>Здесь пока нет записей</h3><p>Выберите специалиста и удобное время в каталоге.</p><a class="button" href="#catalog">Найти специалиста ↗</a></div>';
-   $$('[data-cancel]').forEach(b=>b.onclick=()=>{modal('<h2>Отменить запись?</h2><p>Место освободится, и его смогут выбрать другие клиенты.</p><div class="dialog-actions"><button id="keep-booking" class="button outline">Оставить запись</button><button id="confirm-cancel" class="button">Да, отменить</button></div>');$('#keep-booking').onclick=closeModal;$('#confirm-cancel').onclick=async()=>{try{await api('/bookings/'+b.dataset.cancel+'/cancel',{});closeModal();toast('Запись отменена, место освобождено');await dashboard();}catch(e){toast(e.message);}};});
-   $$('[data-complete]').forEach(b=>b.onclick=async()=>{try{await api('/bookings/'+b.dataset.complete+'/complete',{});toast('Встреча завершена');await dashboard();}catch(e){toast(e.message);}});
+   $('#booking-list').innerHTML=rows.length?rows.map(b=>`<article class="booking-row" data-booking-id="${b.id}"><img src="${esc(b.photo)}" alt=""><div class="booking-info"><span class="badge ${b.status} ${b.phase}">${esc(b.status_label)}</span><h3>${esc(b.service)}</h3><p>${esc(b.specialist)}${!isClient?' · Клиент: '+esc(b.client):''}</p><p><b>${date(b.starts_at)} · ${time(b.starts_at)}–${b.starts_at.slice(0,10)===b.ends_at.slice(0,10)?'':date(b.ends_at)+' · '}${time(b.ends_at)}</b> · ${b.duration} мин · ${b.mode} · ${b.quantity} мест(о)</p>${b.address?`<p>⌖ ${esc(b.address)}</p>`:''}${b.note?`<p class="muted">${esc(b.note)}</p>`:''}</div><div class="booking-actions">${bookingActions(b)}</div></article>`).join(''):'<div class="empty"><span>▦</span><h3>Здесь пока нет записей</h3><p>Выберите специалиста и удобное время в каталоге.</p><a class="button" href="#catalog">Найти специалиста ↗</a></div>';
+   $$('[data-cancel]').forEach(b=>b.onclick=()=>{modal('<h2>Отменить запись?</h2><p>Место освободится, и его смогут выбрать другие клиенты.</p><div class="dialog-actions"><button id="keep-booking" class="button outline">Оставить запись</button><button id="confirm-cancel" class="button">Да, отменить</button></div>');$('#keep-booking').onclick=closeModal;$('#confirm-cancel').onclick=async()=>{try{await api('/bookings/'+b.dataset.cancel+'/cancel',{});closeModal();toast('Запись отменена, место освобождено');await dashboard();}catch(e){toast(e.message);closeModal();await dashboard();}};});
+   $$('[data-complete]').forEach(b=>b.onclick=async()=>{b.disabled=true;try{await api('/bookings/'+b.dataset.complete+'/complete',{});toast('Встреча завершена');}catch(e){toast(e.message);}finally{await dashboard();}});
    $$('[data-review]').forEach(b=>b.onclick=()=>reviewForm(Number(b.dataset.review)));
-  };$('#booking-status').onchange=draw;draw();
+  };$('#booking-status').onchange=()=>{dashboardStatusFilter=$('#booking-status').value;draw();};draw();scheduleDashboardRefresh();
  }else if(dashboardTab==='searches'){
   root.innerHTML='<h2>Недавно вы искали</h2>'+(data.searches.length?data.searches.map(s=>`<button class="search-history" data-query-history="${esc(s.query)}"><span>⌕ &nbsp; ${esc(s.query)}</span><small>${date(s.created_at)}</small><span>↗</span></button>`).join(''):'<div class="empty">Ваши поисковые запросы появятся здесь.</div>');
   $$('[data-query-history]').forEach(b=>b.onclick=()=>{state.query=b.dataset.queryHistory;state.category='Все специалисты';state.mode='';state.maxPrice='';location.hash='catalog';});
