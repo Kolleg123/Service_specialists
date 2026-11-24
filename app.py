@@ -3,6 +3,9 @@ import secrets
 import sqlite3
 import hashlib
 import re
+from dotenv import load_dotenv
+
+load_dotenv()
 from datetime import datetime, timedelta
 from pathlib import Path
 from functools import wraps
@@ -162,8 +165,13 @@ def create_app(test_config=None):
             try:
                 sender = app.config.get('MAIL_SENDER') or send_recovery_email
                 sender(app.config, user['email'], user['name'], link)
-            except Exception:
-                app.logger.warning('Password recovery email could not be sent')
+            except Exception as exc:
+                # Keep the response generic (avoid account enumeration), but make
+                # the cause visible in server logs without exposing addresses,
+                # reset tokens, SMTP responses or credentials.
+                app.logger.error('Password recovery email delivery failed (%s)', type(exc).__name__)
+                with db() as c:
+                    c.execute('DELETE FROM password_reset_tokens WHERE token_hash=?', (token_hash,))
         return jsonify(message='Если адрес зарегистрирован, инструкция будет отправлена на почту'), 200
 
     @app.post('/api/password-reset/confirm')
