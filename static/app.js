@@ -9,6 +9,7 @@ const localNow = () => new Date().toLocaleString('sv-SE', {timeZone:'Europe/Kiro
 const icons = {'Все специалисты':'✧','Дом и ремонт':'⌂','Красота':'✂','Обучение':'▤','Здоровье':'♡','Мероприятия':'◎'};
 let state = {user:null, csrf:'', specialists:[], categories:[], category:'Все специалисты', query:'', sort:'recommended', maxPrice:'', mode:''};
 let dashboardTab = 'bookings';
+let notificationRead = new Set();
 let dashboardStatusFilter = 'all';
 let dashboardRefreshTimer;
 let dashboardRequest = 0;
@@ -66,12 +67,67 @@ function drawCards() {
 }
 function bindProfiles(root=document) {$$('[data-profile]',root).forEach(b=>b.onclick=()=>profile(Number(b.dataset.profile)).catch(e=>toast(e.message)));}
 function login(after=null,register=false) {
- modal(`<span class="eyebrow">ВАШЕ ВРЕМЯ — В ВАШИХ РУКАХ</span><h2>${register?'Создать аккаунт':'Рады видеть вас'}</h2><p class="muted">${register?'Сохраните свои записи, отзывы и историю поиска.':'Войдите, чтобы управлять записями и расписанием.'}</p><form id="login-form">${register?'<label class="field">Ваше имя<input name="name" required minlength="2" maxlength="80" autocomplete="name"></label>':''}<label class="field">Электронная почта<input name="email" type="email" autocomplete="email" required></label><label class="field">Пароль<input name="password" type="password" autocomplete="${register?'new-password':'current-password'}" minlength="8" maxlength="128" required></label><p class="form-error" role="alert"></p><button class="button full">${register?'Зарегистрироваться':'Войти'} →</button></form><button id="auth-switch" class="text-button auth-switch">${register?'Уже есть аккаунт? Войти':'Нет аккаунта? Зарегистрироваться'}</button>${!register?`<div class="demo-access"><span class="eyebrow">ПОПРОБУЙТЕ ДЕМО</span><p>Вымышленные данные, настоящие сценарии</p><div>${[['client','Клиент'],['master','Мастер'],['teacher','Преподаватель'],['admin','Администратор']].map(([k,v])=>`<button data-demo="${k}" class="button outline">${v}</button>`).join('')}</div><small>Общие демо-аккаунты. Не вводите личные данные.</small></div>`:''}`);
+ modal(`<span class="eyebrow">ВАШЕ ВРЕМЯ — В ВАШИХ РУКАХ</span><h2>${register?'Создать аккаунт':'Рады видеть вас'}</h2><p class="muted">${register?'Сохраните свои записи, отзывы и историю поиска.':'Войдите, чтобы управлять записями и расписанием.'}</p><form id="login-form">${register?'<label class="field">Ваше имя<input name="name" required minlength="2" maxlength="80" autocomplete="name"></label>':''}<label class="field">Электронная почта<input name="email" type="email" autocomplete="email" required></label><label class="field">Пароль<input name="password" type="password" autocomplete="${register?'new-password':'current-password'}" minlength="8" maxlength="128" required></label><p class="form-error" role="alert"></p><button class="button full">${register?'Зарегистрироваться':'Войти'} →</button></form>${!register?'<button id="forgot-password" type="button" class="text-button auth-recovery">Забыли пароль?</button>':''}<button id="auth-switch" class="text-button auth-switch">${register?'Уже есть аккаунт? Войти':'Нет аккаунта? Зарегистрироваться'}</button>${!register?`<div class="demo-access"><span class="eyebrow">ПОПРОБУЙТЕ ДЕМО</span><p>Вымышленные данные, настоящие сценарии</p><div>${[['client','Клиент'],['master','Мастер'],['teacher','Преподаватель'],['admin','Администратор']].map(([k,v])=>`<button data-demo="${k}" class="button outline">${v}</button>`).join('')}</div><small>Общие демо-аккаунты. Не вводите личные данные.</small></div>`:''}`);
  const form=$('#login-form');
  async function submit(data){const button=$('button',form);button.disabled=true;try{const res=await api(register?'/register':'/login',data);state.user=res.user;state.csrf=res.csrf;updateAccount();closeModal(); if(after)await after();else{location.hash='dashboard';await dashboard();}}catch(e){$('.form-error',form).textContent=e.message;}finally{button.disabled=false;}}
  form.onsubmit=e=>{e.preventDefault();submit(Object.fromEntries(new FormData(form)));};
  $$('[data-demo]').forEach(b=>b.onclick=()=>submit({email:b.dataset.demo+'@svobodno.demo',password:'Demo2026!'}));
  $('#auth-switch').onclick=()=>login(after,!register);
+ $('#forgot-password')?.addEventListener('click',()=>recoverPassword(form.elements.email.value));
+}
+function recoverPassword(initialEmail='') {
+ let email=String(initialEmail||'').trim();
+ let step='request';
+ const render=()=>{
+  if(step==='request'){
+   modal(`<span class="eyebrow">ДОСТУП К АККАУНТУ</span><div class="recovery-progress"><span class="active">1</span><i></i><span>2</span></div><h2>Восстановление пароля</h2><p class="muted">Укажите почту, которую использовали при регистрации. Следующий экран покажет форму ввода кода из письма.</p><form id="recovery-request-form"><label class="field">Электронная почта<input name="email" type="email" value="${esc(email)}" autocomplete="email" required placeholder="name@example.com"></label><div class="prototype-note"><strong>Демонстрационный интерфейс</strong><span>Отправка письма пока не подключена. Это просмотр макета будущего сценария.</span></div><p class="form-error" role="alert"></p><button class="button full">Продолжить →</button></form><button id="recovery-back" class="text-button auth-switch">Вернуться ко входу</button>`);
+   const form=$('#recovery-request-form');
+   form.onsubmit=e=>{e.preventDefault();email=form.elements.email.value.trim();step='code';render();};
+   $('#recovery-back').onclick=()=>login();
+  } else if(step==='code'){
+   modal(`<span class="eyebrow">ДОСТУП К АККАУНТУ</span><div class="recovery-progress"><span class="done">✓</span><i></i><span class="active">2</span></div><h2>Придумайте новый пароль</h2><p class="muted">Для адреса <strong>${esc(email)}</strong> предусмотрено письмо с одноразовым кодом.</p><form id="recovery-code-form"><label class="field">Код из письма<input name="code" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" maxlength="6" required placeholder="000000"></label><label class="field">Новый пароль<input name="password" type="password" autocomplete="new-password" minlength="8" maxlength="128" required placeholder="Не менее 8 символов"></label><label class="field">Повторите новый пароль<input name="password_repeat" type="password" autocomplete="new-password" minlength="8" maxlength="128" required placeholder="Введите пароль ещё раз"></label><div class="prototype-note"><strong>Пример для просмотра: 123456</strong><span>Проверка кода и сохранение пароля не обращаются к серверу.</span></div><p class="form-error" role="alert"></p><button class="button full">Проверить и продолжить →</button></form><button id="recovery-back" class="text-button auth-switch">Изменить адрес почты</button>`);
+   const form=$('#recovery-code-form');
+   form.onsubmit=e=>{e.preventDefault();const d=Object.fromEntries(new FormData(form));if(d.code!=='123456'){$('.form-error',form).textContent='Для демонстрации введите код 123456';return;}if(d.password!==d.password_repeat){$('.form-error',form).textContent='Пароли не совпадают';return;}step='complete';render();};
+   $('#recovery-back').onclick=()=>{step='request';render();};
+  } else {
+   modal(`<div class="recovery-success"><span class="success-mark">✓</span><span class="eyebrow">ПРЕДПРОСМОТР ЗАВЕРШЁН</span><h2>Экран готов</h2><p class="muted">Сценарий восстановления для <strong>${esc(email)}</strong> пройден в демонстрационном интерфейсе.</p><div class="prototype-note"><strong>Пароль не изменён</strong><span>Для реального восстановления нужны API проверки токена, безопасное хранение одноразового кода и отправка письма через SMTP.</span></div><button id="recovery-finish" class="button full">Вернуться ко входу</button></div>`);
+   $('#recovery-finish').onclick=()=>login();
+  }
+ };
+ render();
+}
+function notificationsForRole(role) {
+ const common = [
+  {id:'booking-confirmed', title:'Запись подтверждена', body:'Вы записаны к Анне Лебедевой · завтра, 14:00', kind:'success', age:'Недавно'},
+  {id:'schedule-update', title:'Изменение расписания', body:'Время одной из встреч было обновлено. Проверьте детали записи.', kind:'info', age:'Сегодня'}
+ ];
+ if(role==='master') return [
+  {id:'new-booking',title:'Новая запись',body:'Клиент выбрал услугу «Устранение протечки» · завтра, 10:00',kind:'success',age:'10 минут назад'},
+  {id:'booking-cancelled',title:'Запись отменена',body:'Одно место снова доступно в расписании.',kind:'warning',age:'Сегодня'},
+  {id:'schedule-reminder',title:'Проверьте расписание',body:'На ближайшие дни опубликовано 4 свободных слота.',kind:'info',age:'Вчера'}
+ ];
+ if(role==='admin') return [
+  {id:'review-pending',title:'Новый отзыв ожидает проверки',body:'Есть публикация, которой требуется модерация.',kind:'warning',age:'5 минут назад'},
+  {id:'specialist-update',title:'Изменены данные специалиста',body:'Проверьте карточку перед отображением в каталоге.',kind:'info',age:'Сегодня'}
+ ];
+ return common;
+}
+function bindNotifications(role) {
+ const toggle=$('#notifications-toggle'), panel=$('#notifications-panel');
+ if(!toggle||!panel)return;
+ const close=()=>{panel.classList.add('hidden');toggle.setAttribute('aria-expanded','false');};
+ toggle.onclick=()=>{const open=panel.classList.toggle('hidden')===false;toggle.setAttribute('aria-expanded',String(open));};
+ $('#notifications-mark-read')?.addEventListener('click',()=>{notificationsForRole(role).forEach(n=>notificationRead.add(n.id));close();renderNotificationPanel(role);});
+ panel.querySelectorAll('[data-notification-id]').forEach(b=>b.onclick=()=>{notificationRead.add(b.dataset.notificationId);close();renderNotificationPanel(role);});
+}
+function renderNotificationPanel(role) {
+ const panel=$('#notifications-panel'), toggle=$('#notifications-toggle');
+ if(!panel||!toggle)return;
+ const items=notificationsForRole(role), unread=items.filter(n=>!notificationRead.has(n.id)).length;
+ toggle.querySelector('.notification-count').textContent=unread?String(unread):'';
+ toggle.querySelector('.notification-count').classList.toggle('hidden',!unread);
+ panel.innerHTML=`<div class="notification-panel-head"><div><strong>Уведомления</strong><span>${unread?`${unread} непрочитанных`:'Всё просмотрено'}</span></div><button id="notifications-mark-read" class="text-button" ${unread?'':'disabled'}>Прочитать всё</button></div><div class="notification-list">${items.map(n=>`<button class="notification-item ${notificationRead.has(n.id)?'read':'unread'}" data-notification-id="${n.id}"><span class="notification-dot ${n.kind}" aria-hidden="true"></span><span class="notification-copy"><strong>${esc(n.title)}</strong><span>${esc(n.body)}</span><small>${esc(n.age)}</small></span></button>`).join('')}</div><p class="notification-demo-note">Примеры уведомлений. Реальная отправка и хранение пока не подключены.</p>`;
+  bindNotifications(role);
 }
 function bookingActions(booking) {
  const buttons = [];
@@ -101,12 +157,14 @@ async function dashboard() {
  const data=await api('/dashboard');
  if (requestId !== dashboardRequest || state.user !== user || location.hash !== '#dashboard') return;
  const isClient=user.role==='client', isMaster=user.role==='master', isAdmin=user.role==='admin';
- const tabs=isClient?[['bookings','Мои записи'],['searches','История поиска'],['reviews','Мои отзывы']]:isMaster?[['bookings','Записи клиентов'],['schedule','Моё расписание'],['services','Мои услуги']]:[['bookings','Все записи'],['moderation','Модерация отзывов'],['people','Специалисты и услуги']];
+ const tabs=isClient?[['bookings','Мои записи'],['searches','История поиска'],['reviews','Мои отзывы']]:isMaster?[['bookings','Записи клиентов'],['schedule','Моё расписание'],['services','Мои услуги']]:[['bookings','Все записи'],['moderation','Модерация отзывов'],['people','Специалисты и услуги'],['audit','Журнал действий']];
  if(!tabs.some(x=>x[0]===dashboardTab))dashboardTab='bookings';
- $('#app').innerHTML=`<section class="dashboard"><div class="dashboard-heading"><div><span class="eyebrow">${isClient?'ЛИЧНЫЙ КАБИНЕТ':isMaster?'КАБИНЕТ СПЕЦИАЛИСТА':'АДМИНИСТРИРОВАНИЕ'}</span><h1>Здравствуйте, ${esc(user.name.split(' ')[0])}<span class="wave">✧</span></h1><p class="muted">${isClient?'Встречи, которые делают жизнь проще.':isMaster?'Ваше время, ваши услуги и ваши клиенты.':'Управляйте качеством сервиса и публикациями.'}</p></div><button id="logout" class="button outline">Выйти ↗</button></div><div class="stats"><div><span>${isClient?'Предстоящих встреч':'Активных записей'}</span><strong>${data.bookings.filter(b=>isClient?b.phase==='upcoming':b.status==='confirmed').length}</strong></div><div><span>Завершённых встреч</span><strong>${data.bookings.filter(b=>b.status==='completed').length}</strong></div><div><span>${isAdmin?'На модерации':'Всего записей'}</span><strong>${isAdmin?data.reviews.filter(r=>r.status==='pending').length:data.bookings.length}</strong></div></div><div class="dashboard-tabs">${tabs.map(([id,t])=>`<button data-tab="${id}" class="${dashboardTab===id?'selected':''}">${t}</button>`).join('')}</div><div id="dashboard-content"></div></section>`;
- $('#logout').onclick=async()=>{const r=await api('/logout',{});state.user=null;state.csrf=r.csrf;dashboardTab='bookings';dashboardStatusFilter='all';clearTimeout(dashboardRefreshTimer);updateAccount();location.hash='catalog';catalog();};
+ $('#app').innerHTML=`<section class="dashboard"><div class="dashboard-heading"><div><span class="eyebrow">${isClient?'ЛИЧНЫЙ КАБИНЕТ':isMaster?'КАБИНЕТ СПЕЦИАЛИСТА':'АДМИНИСТРИРОВАНИЕ'}</span><h1>Здравствуйте, ${esc(user.name.split(' ')[0])}<span class="wave">✧</span></h1><p class="muted">${isClient?'Встречи, которые делают жизнь проще.':isMaster?'Ваше время, ваши услуги и ваши клиенты.':'Управляйте качеством сервиса и публикациями.'}</p></div><div class="dashboard-actions"><div class="notification-control"><button id="notifications-toggle" class="button outline notification-trigger" aria-expanded="false" aria-controls="notifications-panel"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 9a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9M10 21h4"/></svg><span>Уведомления</span><span class="notification-count"></span></button><div id="notifications-panel" class="notification-panel hidden" aria-label="Список уведомлений"></div></div><button id="logout" class="button outline">Выйти ↗</button></div></div><div class="stats"><div><span>${isClient?'Предстоящих встреч':'Активных записей'}</span><strong>${data.bookings.filter(b=>isClient?b.phase==='upcoming':b.status==='confirmed').length}</strong></div><div><span>Завершённых встреч</span><strong>${data.bookings.filter(b=>b.status==='completed').length}</strong></div><div><span>${isAdmin?'На модерации':'Всего записей'}</span><strong>${isAdmin?data.reviews.filter(r=>r.status==='pending').length:data.bookings.length}</strong></div></div><div class="dashboard-tabs">${tabs.map(([id,t])=>`<button data-tab="${id}" class="${dashboardTab===id?'selected':''}">${t}</button>`).join('')}</div><div id="dashboard-content"></div></section>`;
+ $('#logout').onclick=async()=>{const r=await api('/logout',{});state.user=null;state.csrf=r.csrf;dashboardTab='bookings';dashboardStatusFilter='all';notificationRead=new Set();clearTimeout(dashboardRefreshTimer);updateAccount();location.hash='catalog';catalog();};
  $$('[data-tab]').forEach(b=>b.onclick=()=>{dashboardTab=b.dataset.tab;dashboard().catch(e=>toast(e.message));});
  const root=$('#dashboard-content');
+ renderNotificationPanel(user.role);
+ bindNotifications(user.role);
  if(dashboardTab==='bookings'){
   root.innerHTML=`<div class="section-title"><h2>${isClient?'Мои встречи':'История записей'}</h2><select id="booking-status" aria-label="Статус записи"><option value="all">Все записи</option><option value="confirmed">Активные</option><option value="completed">Завершённые</option><option value="cancelled">Отменённые</option></select></div><div class="dashboard-update"><p>Время Кирова · UTC+3. Статус и действия проверяет сервер.</p><button id="refresh-bookings" class="button outline">Обновить статусы</button><p id="dashboard-update-status" role="status"></p></div><div id="booking-list"></div>`;
   $('#booking-status').value=dashboardStatusFilter;
@@ -140,6 +198,22 @@ async function dashboard() {
   const a=await api('/admin');
   root.innerHTML='<h2>Специалисты и услуги</h2><p class="muted">Скрытые специалисты и услуги недоступны для новых записей. Существующие записи сохраняются.</p>'+a.specialists.map(s=>`<article class="panel admin-person"><div class="service-row"><div><h3>${esc(s.name)}</h3><p>${esc(s.profession)} · ${s.active?'В каталоге':'Скрыт'}</p></div><button class="button ${s.active?'outline':'pale'}" data-toggle="specialist" data-id="${s.id}" data-active="${!s.active}">${s.active?'Скрыть':'Показать'}</button></div>${a.services.filter(v=>v.specialist_id===s.id).map(v=>`<div class="admin-service"><span>${esc(v.title)} · ${money(v.price)}</span><button class="text-button" data-toggle="service" data-id="${v.id}" data-active="${!v.active}">${v.active?'Скрыть услугу':'Показать услугу'}</button></div>`).join('')}</article>`).join('');
   $$('[data-toggle]').forEach(b=>b.onclick=async()=>{try{await api('/admin/moderate',{kind:b.dataset.toggle,id:Number(b.dataset.id),active:b.dataset.active==='true'});await refreshCatalog();await dashboard();toast('Изменения сохранены');}catch(e){toast(e.message);}});
+ }else if(dashboardTab==='audit'&&isAdmin){
+  const auditRows=[
+   {id:1,stamp:'24.11.2026 · 12:42',actor:'admin@svobodno.demo',role:'Администратор',action:'Отзыв опубликован',object:'Отзыв #128',result:'Успешно',kind:'success'},
+   {id:2,stamp:'24.11.2026 · 12:18',actor:'admin@svobodno.demo',role:'Администратор',action:'Услуга скрыта в каталоге',object:'Услуга #42 · «Разговорный клуб»',result:'Успешно',kind:'success'},
+   {id:3,stamp:'24.11.2026 · 11:54',actor:'client@svobodno.demo',role:'Клиент',action:'Создана запись',object:'Запись #418 · Анна Лебедева',result:'Успешно',kind:'success'},
+   {id:4,stamp:'24.11.2026 · 11:30',actor:'master@svobodno.demo',role:'Специалист',action:'Добавлен свободный слот',object:'24 ноября · 15:00',result:'Успешно',kind:'success'},
+   {id:5,stamp:'24.11.2026 · 10:05',actor:'admin@svobodno.demo',role:'Администратор',action:'Вход в панель',object:'Административный кабинет',result:'Успешно',kind:'success'},
+   {id:6,stamp:'23.11.2026 · 18:16',actor:'client@svobodno.demo',role:'Клиент',action:'Отмена записи',object:'Запись #411',result:'Выполнено',kind:'info'}
+  ];
+  root.innerHTML=`<div class="audit-heading"><div><h2>Журнал действий</h2><p class="muted">История операций пользователей и изменений в сервисе</p></div><span class="audit-demo-label">ДЕМО-ДАННЫЕ</span></div><div class="prototype-note audit-notice"><strong>Демонстрационный журнал</strong><span>Эти примеры показывают структуру будущего аудита. Серверное логирование и API пока не подключены.</span></div><div class="audit-summary"><div><span>Событий в примере</span><strong>06</strong></div><div><span>Типов ролей</span><strong>03</strong></div><div><span>Ошибок в примере</span><strong>00</strong></div></div><div class="audit-filters"><label class="field"><span>Поиск по журналу</span><input id="audit-search" type="search" placeholder="Пользователь, действие или объект"></label><label class="field"><span>Роль</span><select id="audit-role"><option value="">Все роли</option><option>Администратор</option><option>Специалист</option><option>Клиент</option></select></label></div><div class="audit-list" id="audit-list" aria-live="polite"></div>`;
+  const drawAudit=()=>{
+   const q=$('#audit-search').value.trim().toLowerCase(), role=$('#audit-role').value;
+   const rows=auditRows.filter(r=>(!role||r.role===role)&&(!q||[r.actor,r.action,r.object,r.result].join(' ').toLowerCase().includes(q)));
+   $('#audit-list').innerHTML=rows.length?rows.map(r=>`<article class="audit-entry"><div class="audit-entry-time"><span>${esc(r.stamp.split(' · ')[0])}</span><strong>${esc(r.stamp.split(' · ')[1])}</strong></div><div class="audit-entry-main"><div class="audit-entry-top"><strong>${esc(r.action)}</strong><span class="audit-result ${r.kind}">${esc(r.result)}</span></div><p>${esc(r.object)}</p><small>${esc(r.actor)} <span>·</span> ${esc(r.role)}</small></div></article>`).join(''):'<div class="empty compact"><h3>Ничего не найдено</h3><p>Измените поисковый запрос или выберите другую роль.</p></div>';
+  };
+  $('#audit-search').oninput=drawAudit;$('#audit-role').onchange=drawAudit;drawAudit();
  }
 }
 function reviewForm(booking_id){modal('<h2>Как прошла встреча?</h2><p class="muted">Отзыв появится в профиле после проверки администратором.</p><form id="review-form"><label class="field">Ваша оценка<select name="rating"><option value="5">★★★★★ — Отлично</option><option value="4">★★★★ — Хорошо</option><option value="3">★★★ — Нормально</option><option value="2">★★ — Плохо</option><option value="1">★ — Очень плохо</option></select></label><label class="field">Ваш отзыв<textarea name="content" minlength="5" maxlength="1500" required placeholder="Что вам понравилось? Что можно улучшить?"></textarea></label><p class="form-error" role="alert"></p><button class="button">Отправить отзыв →</button></form>');const form=$('#review-form');form.onsubmit=async e=>{e.preventDefault();try{await api('/reviews',{booking_id,rating:Number(form.elements.rating.value),content:form.elements.content.value});closeModal();toast('Спасибо! Отзыв отправлен на модерацию');await dashboard();}catch(e){$('.form-error',form).textContent=e.message;}};}
