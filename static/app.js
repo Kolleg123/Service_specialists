@@ -102,6 +102,7 @@ async function dashboard() {
  if (requestId !== dashboardRequest || state.user !== user || location.hash !== '#dashboard') return;
  const isClient=user.role==='client', isMaster=user.role==='master', isAdmin=user.role==='admin';
  const tabs=isClient?[['bookings','Мои записи'],['searches','История поиска'],['reviews','Мои отзывы']]:isMaster?[['bookings','Записи клиентов'],['schedule','Моё расписание'],['services','Мои услуги']]:[['bookings','Все записи'],['moderation','Модерация отзывов'],['people','Специалисты и услуги']];
+ if(!isAdmin)tabs.push(['notifications','Уведомления']);
  if(!tabs.some(x=>x[0]===dashboardTab))dashboardTab='bookings';
  $('#app').innerHTML=`<section class="dashboard"><div class="dashboard-heading"><div><span class="eyebrow">${isClient?'ЛИЧНЫЙ КАБИНЕТ':isMaster?'КАБИНЕТ СПЕЦИАЛИСТА':'АДМИНИСТРИРОВАНИЕ'}</span><h1>Здравствуйте, ${esc(user.name.split(' ')[0])}<span class="wave">✧</span></h1><p class="muted">${isClient?'Встречи, которые делают жизнь проще.':isMaster?'Ваше время, ваши услуги и ваши клиенты.':'Управляйте качеством сервиса и публикациями.'}</p></div><button id="logout" class="button outline">Выйти ↗</button></div><div class="stats"><div><span>${isClient?'Предстоящих встреч':'Активных записей'}</span><strong>${data.bookings.filter(b=>isClient?b.phase==='upcoming':b.status==='confirmed').length}</strong></div><div><span>Завершённых встреч</span><strong>${data.bookings.filter(b=>b.status==='completed').length}</strong></div><div><span>${isAdmin?'На модерации':'Всего записей'}</span><strong>${isAdmin?data.reviews.filter(r=>r.status==='pending').length:data.bookings.length}</strong></div></div><div class="dashboard-tabs">${tabs.map(([id,t])=>`<button data-tab="${id}" class="${dashboardTab===id?'selected':''}">${t}</button>`).join('')}</div><div id="dashboard-content"></div></section>`;
  $('#logout').onclick=async()=>{const r=await api('/logout',{});state.user=null;state.csrf=r.csrf;dashboardTab='bookings';dashboardStatusFilter='all';clearTimeout(dashboardRefreshTimer);updateAccount();location.hash='catalog';catalog();};
@@ -118,6 +119,23 @@ async function dashboard() {
    $$('[data-complete]').forEach(b=>b.onclick=async()=>{b.disabled=true;try{await api('/bookings/'+b.dataset.complete+'/complete',{});toast('Встреча завершена');}catch(e){toast(e.message);}finally{await dashboard();}});
    $$('[data-review]').forEach(b=>b.onclick=()=>reviewForm(Number(b.dataset.review)));
   };$('#booking-status').onchange=()=>{dashboardStatusFilter=$('#booking-status').value;draw();};draw();scheduleDashboardRefresh();
+ }else if(dashboardTab==='notifications'){
+  const {notifications}=await api('/notifications');
+  if (requestId !== dashboardRequest || state.user !== user || location.hash !== '#dashboard') return;
+  root.innerHTML='<h2>Уведомления</h2>'+(notifications.length?notifications.map(n=>
+   `<article class="panel"><p>${esc(n.message)}</p><small>${date(n.created_at)} · ${time(n.created_at)} (Киров)</small>
+   ${n.is_read?'<p class="muted">Прочитано</p>':`<button class="text-button" data-read-notification="${n.id}">Отметить прочитанным</button>`}</article>`
+  ).join(''):'<p class="empty">Уведомлений пока нет.</p>');
+  $$('[data-read-notification]',root).forEach(button=>button.onclick=async()=>{
+   button.disabled=true;
+   try{
+    await api('/notifications/'+button.dataset.readNotification+'/read',{});
+    const label=document.createElement('p');
+    label.className='muted';
+    label.textContent='Прочитано';
+    button.replaceWith(label);
+   }catch(error){button.disabled=false;toast(error.message);}
+  });
  }else if(dashboardTab==='searches'){
   root.innerHTML='<h2>Недавно вы искали</h2>'+(data.searches.length?data.searches.map(s=>`<button class="search-history" data-query-history="${esc(s.query)}"><span>⌕ &nbsp; ${esc(s.query)}</span><small>${date(s.created_at)}</small><span>↗</span></button>`).join(''):'<div class="empty">Ваши поисковые запросы появятся здесь.</div>');
   $$('[data-query-history]').forEach(b=>b.onclick=()=>{state.query=b.dataset.queryHistory;state.category='Все специалисты';state.mode='';state.maxPrice='';location.hash='catalog';});

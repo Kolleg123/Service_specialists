@@ -159,6 +159,27 @@ def create_app(test_config=None):
             return fail(str(error), error.status)
         return jsonify(id=ident), 201
 
+    @app.get('/api/notifications')
+    @auth()
+    def notifications(user):
+        with db() as c:
+            rows = c.execute(
+                'SELECT id,booking_id,event,message,created_at,is_read FROM notifications WHERE user_id=? ORDER BY id DESC',
+                (user['id'],)).fetchall()
+        return jsonify(notifications=[{**dict(row), 'is_read': bool(row['is_read'])} for row in rows])
+
+    @app.post('/api/notifications/<int:ident>/read')
+    @auth()
+    def read_notification(user, ident):
+        if ident > 2**63 - 1:
+            return fail('Уведомление не найдено', 404)
+        with db() as c:
+            changed = c.execute('UPDATE notifications SET is_read=1 WHERE id=? AND user_id=?',
+                                (ident, user['id'])).rowcount
+        if not changed:
+            return fail('Уведомление не найдено', 404)
+        return jsonify(ok=True)
+
     @app.get('/api/dashboard')
     @auth()
     def dashboard(user):
