@@ -24,7 +24,7 @@ def test_slot_horizon_and_capacity_boundaries(tmp_path, monkeypatch):
     services = master.get("/api/master").json["services"]
     individual = services[0]["id"]
 
-    at_limit = (clock + timedelta(days=365)).replace(hour=8)
+    at_limit = clock + timedelta(days=365)
     response = post(master, "/master/slots", {
         "service_id": individual,
         "starts_at": at_limit.isoformat(timespec="minutes"),
