@@ -2,7 +2,7 @@ name: CI Checks
 
 on:
   push:
-    branches: [main, ai_version, final-release]
+    branches: [main, ai_version, final-release, feature/testing-t024-t028]
   pull_request:
     branches: [main, ai_version, final-release]
 

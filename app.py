@@ -287,7 +287,13 @@ def create_app(test_config=None):
                 return fail('Несколько мест доступны только для групповой услуги')
             end = starts + timedelta(minutes=service['duration'])
             existing = c.execute('SELECT s.starts_at,v.duration FROM slots s JOIN services v ON v.id=s.service_id WHERE s.specialist_id=? AND s.active=1', (user['specialist_id'],)).fetchall()
-            if any(starts < datetime.fromisoformat(r['starts_at']) + timedelta(minutes=r['duration']) and end > datetime.fromisoformat(r['starts_at']) for r in existing):
+            try:
+                occupied = [(datetime.fromisoformat(r['starts_at']), r['duration']) for r in existing]
+                if any(start.tzinfo is not None for start, _ in occupied):
+                    raise ValueError
+            except (ValueError, TypeError):
+                return fail('В расписании специалиста обнаружена некорректная дата', 409)
+            if any(starts < start + timedelta(minutes=duration) and end > start for start, duration in occupied):
                 return fail('Этот интервал пересекается с другим слотом', 409)
             c.execute('INSERT INTO slots(specialist_id,service_id,starts_at,capacity) VALUES(?,?,?,?)', (user['specialist_id'], service['id'], starts.isoformat(timespec='minutes'), cap))
         return jsonify(ok=True), 201
