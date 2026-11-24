@@ -2,7 +2,7 @@ name: CI Checks
 
 on:
   push:
-    branches: [main, ai_version, final-release, feature/testing-t024-t028]
+    branches: [main, ai_version, final-release, feature/testing-t024-t028, feature/password-recovery-email]
   pull_request:
     branches: [main, ai_version, final-release]
 
