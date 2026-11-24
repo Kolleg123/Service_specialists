@@ -17,10 +17,13 @@ def send_recovery_email(config, recipient, display_name, reset_url):
         f"Для создания нового пароля перейдите по ссылке (действует 30 минут):\n{reset_url}\n\n"
         "Если вы не запрашивали восстановление, просто проигнорируйте это письмо."
     )
-    with smtplib.SMTP(host, int(config.get('SMTP_PORT', 587)), timeout=10) as smtp:
+    port = int(config.get('SMTP_PORT', 587))
+    client = smtplib.SMTP_SSL if port == 465 else smtplib.SMTP
+    with client(host, port, timeout=10) as smtp:
         smtp.ehlo()
-        smtp.starttls()
-        smtp.ehlo()
+        if port != 465:
+            smtp.starttls()
+            smtp.ehlo()
         username, password = config.get('SMTP_USERNAME'), config.get('SMTP_PASSWORD')
         if username:
             smtp.login(username, password or '')
