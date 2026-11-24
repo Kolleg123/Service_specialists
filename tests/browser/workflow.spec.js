@@ -31,6 +31,15 @@ test('booking, cancellation, review, moderation, schedule and consultation', asy
   await page.getByRole('button', { name: 'Отменить запись', exact: true }).click();
   await page.getByRole('button', { name: 'Да, отменить' }).click();
   await expect(page.locator('.booking-row .cancelled')).toHaveCount(1);
+  await page.getByRole('button', { name: 'Уведомления', exact: true }).click();
+  const notice = page.locator('#dashboard-content article').filter({ hasText: 'Запись отменена' });
+  await expect(notice).toBeVisible();
+  await notice.getByRole('button', { name: 'Отметить прочитанным' }).click();
+  await expect(notice).toContainText('Прочитано');
+  await page.reload();
+  await page.getByRole('button', { name: 'Уведомления', exact: true }).click();
+  await expect(notice).toContainText('Прочитано');
+  await page.getByRole('button', { name: 'Мои записи', exact: true }).click();
   await page.getByRole('button', { name: 'Оставить отзыв' }).click();
   await page.getByLabel('Ваш отзыв').fill('Очень внимательный мастер. Всё исправил быстро и аккуратно.');
   await page.getByRole('button', { name: 'Отправить отзыв' }).click();

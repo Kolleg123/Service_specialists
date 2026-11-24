@@ -8,6 +8,17 @@ CREATE TABLE IF NOT EXISTS users(id INTEGER PRIMARY KEY,name TEXT,email TEXT UNI
 CREATE TABLE IF NOT EXISTS services(id INTEGER PRIMARY KEY,specialist_id INTEGER REFERENCES specialists(id),title TEXT,price INTEGER,duration INTEGER,mode TEXT,active INTEGER DEFAULT 1);
 CREATE TABLE IF NOT EXISTS slots(id INTEGER PRIMARY KEY,specialist_id INTEGER REFERENCES specialists(id),service_id INTEGER REFERENCES services(id),starts_at TEXT,capacity INTEGER CHECK(capacity>0),active INTEGER DEFAULT 1);
 CREATE TABLE IF NOT EXISTS bookings(id INTEGER PRIMARY KEY,user_id INTEGER REFERENCES users(id),slot_id INTEGER REFERENCES slots(id),quantity INTEGER CHECK(quantity>0),address TEXT,note TEXT,status TEXT,created_at TEXT,total INTEGER);
+CREATE TABLE IF NOT EXISTS notifications(
+    id INTEGER PRIMARY KEY,
+    user_id INTEGER NOT NULL REFERENCES users(id),
+    booking_id INTEGER NOT NULL REFERENCES bookings(id),
+    event TEXT NOT NULL CHECK(event IN ('confirmed','cancelled','completed')),
+    message TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    is_read INTEGER NOT NULL DEFAULT 0 CHECK(is_read IN (0,1)),
+    UNIQUE(user_id,booking_id,event)
+);
+CREATE INDEX IF NOT EXISTS notification_inbox ON notifications(user_id,id DESC);
 CREATE TABLE IF NOT EXISTS reviews(id INTEGER PRIMARY KEY,user_id INTEGER REFERENCES users(id),specialist_id INTEGER REFERENCES specialists(id),booking_id INTEGER UNIQUE REFERENCES bookings(id),rating INTEGER CHECK(rating BETWEEN 1 AND 5),content TEXT,status TEXT,created_at TEXT);
 CREATE TABLE IF NOT EXISTS searches(id INTEGER PRIMARY KEY,user_id INTEGER REFERENCES users(id),query TEXT,created_at TEXT);
 CREATE INDEX IF NOT EXISTS booking_slot ON bookings(slot_id,status);
