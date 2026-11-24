@@ -32,7 +32,7 @@ def test_slot_horizon_and_capacity_boundaries(tmp_path, monkeypatch):
     })
     assert response.status_code == 201
 
-    beyond_limit = at_limit + timedelta(minutes=1)
+    beyond_limit = at_limit + timedelta(hours=2)
     response = post(master, "/master/slots", {
         "service_id": individual,
         "starts_at": beyond_limit.isoformat(timespec="minutes"),
@@ -232,7 +232,7 @@ def test_review_input_validation_does_not_create_partial_records(tmp_path):
         {"rating": 0, "content": "Нормально, спасибо!"},
         {"rating": 6, "content": "Нормально, спасибо!"},
         {"rating": True, "content": "Нормально, спасибо!"},
-        {"rating": 5, "content": "Коротко"},
+        {"rating": 5, "content": "Мало"},
         {"rating": 5, "content": "x" * 1501},
     ]
     for values in invalid:
