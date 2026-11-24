@@ -16,7 +16,9 @@
 
 ## Конфигурация
 
-Скопируйте `.env.example` в локальную конфигурацию окружения и задайте `APP_BASE_URL`, `APP_SECRET`, `SMTP_HOST`, `SMTP_PORT`, `SMTP_USERNAME`, `SMTP_PASSWORD`, `SMTP_FROM_EMAIL`, `SMTP_FROM_NAME`. Реальные секреты не коммитить. Для production обязательны HTTPS и `COOKIE_SECURE=true`. SMTP-порт 587 использует STARTTLS.
+Скопируйте `.env.example` в файл `.env` в корне проекта (рядом с `app.py`). Приложение загружает его автоматически при старте. Файл `.env` не добавляйте в Git. Задайте `APP_BASE_URL`, `APP_SECRET`, `SMTP_HOST`, `SMTP_PORT`, `SMTP_USERNAME`, `SMTP_PASSWORD`, `SMTP_FROM_EMAIL`, `SMTP_FROM_NAME`. Реальные секреты не коммитить. Для production обязательны HTTPS и `COOKIE_SECURE=true`. SMTP-порт 587 использует STARTTLS, порт 465 — TLS сразу при подключении. Для Gmail укажите `SMTP_HOST=smtp.gmail.com`, `SMTP_PORT=587`, полный адрес в `SMTP_USERNAME`, а в `SMTP_PASSWORD` — пароль приложения (не обычный пароль аккаунта; у Google должна быть включена двухэтапная проверка). `SMTP_FROM_EMAIL` обычно должен совпадать с авторизованным отправителем.
+
+После настройки перезапустите Flask. При проблеме доставки серверный лог покажет тип ошибки (например, `SMTPAuthenticationError`, `SMTPConnectError` или `RuntimeError`), не раскрывая пароль, токен или адрес пользователя. Если лог сообщает `RuntimeError`, проверьте `SMTP_HOST` и `SMTP_FROM_EMAIL`; если SMTP authentication — проверьте логин и пароль приложения. Проверьте также папку «Спам» и ограничения почтового провайдера.
 
 ## Сценарии и критерии приёмки
 
