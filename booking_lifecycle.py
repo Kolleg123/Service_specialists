@@ -1,6 +1,7 @@
 """Shared server-side state, action permissions and atomic booking transitions."""
 from datetime import timedelta
 
+from booking_notifications import notify_booking
 from booking_service import BookingError, parse_start
 
 
@@ -59,7 +60,8 @@ def transition_booking(connection, user, booking_id, action, clock):
             raise BookingError('Недостаточно прав', 403)
     else:
         raise BookingError('Неизвестное действие')
-    policy = booking_policy(booking, user, clock())
+    current_time = clock()
+    policy = booking_policy(booking, user, current_time)
     if not policy['actions'][action]:
         reason = policy['action_reasons'].get(action, 'Можно отменить только предстоящую активную запись.')
         raise BookingError(reason, 409)
@@ -68,3 +70,4 @@ def transition_booking(connection, user, booking_id, action, clock):
                                  (target, booking_id)).rowcount
     if changed != 1:
         raise BookingError('Статус записи изменился. Обновите список.', 409)
+    notify_booking(connection, booking_id, target, current_time)

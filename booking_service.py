@@ -6,6 +6,8 @@ use the same rules; booking repeats them under a SQLite write transaction.
 """
 from datetime import datetime, timedelta
 
+from booking_notifications import notify_booking
+
 
 class BookingError(Exception):
     def __init__(self, message, status=400):
@@ -109,7 +111,9 @@ def create_booking(connection, user_id, data, current_time):
     if connection.execute('''SELECT id FROM bookings WHERE slot_id=? AND user_id=?
         AND status='confirmed' ''', (slot_id, user_id)).fetchone():
         raise BookingError('Вы уже записаны на это время', 409)
-    return connection.execute('''INSERT INTO bookings
+    booking_id = connection.execute('''INSERT INTO bookings
         (user_id,slot_id,quantity,address,note,status,created_at,total)
         VALUES(?,?,?,?,?,'confirmed',?,?)''',
         (user_id, slot_id, qty, address, note, current_time.isoformat(timespec='minutes'), slot['price'] * qty)).lastrowid
+    notify_booking(connection, booking_id, 'confirmed', current_time)
+    return booking_id
