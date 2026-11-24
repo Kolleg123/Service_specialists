@@ -83,6 +83,14 @@ def create_app(test_config=None):
             if not isinstance(request.get_json(), dict):
                 return fail('Ожидается JSON-объект')
 
+    @app.after_request
+    def password_recovery_headers(response):
+        if request.path == '/reset-password':
+            response.headers['Cache-Control'] = 'no-store'
+            response.headers['Referrer-Policy'] = 'no-referrer'
+            response.headers['X-Robots-Tag'] = 'noindex, nofollow'
+        return response
+
     @app.errorhandler(400)
     def bad_request(_):
         return fail('Некорректный запрос')
