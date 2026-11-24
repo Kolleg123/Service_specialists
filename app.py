@@ -130,7 +130,7 @@ def create_app(test_config=None):
     def request_password_reset():
         data = request.get_json()
         email = str(data.get('email', '')).strip().lower()
-        if len(email) > 120 or not re.fullmatch(r'[^\\s@]+@[^\\s@]+\\.[^\\s@]+', email):
+        if len(email) > 120 or not re.fullmatch(r'[^\s@]+@[^\s@]+\.[^\s@]+', email):
             return fail('Укажите корректный адрес электронной почты')
         ip = request.remote_addr or 'unknown'
         email_hash = hashlib.sha256(email.encode('utf-8')).hexdigest()
