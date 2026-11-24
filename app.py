@@ -1,6 +1,8 @@
 import os
 import secrets
 import sqlite3
+import hashlib
+import re
 from datetime import datetime, timedelta
 from pathlib import Path
 from functools import wraps
@@ -11,6 +13,7 @@ from flask import Flask, jsonify, request, session, send_from_directory
 from werkzeug.security import generate_password_hash, check_password_hash
 from booking_service import BookingError, available_slots, create_booking
 from booking_lifecycle import booking_interval, booking_policy, transition_booking
+from password_recovery import send_recovery_email
 
 TZ = ZoneInfo('Europe/Kirov')
 CATEGORIES = ['Все специалисты', 'Дом и ремонт', 'Красота', 'Обучение', 'Здоровье', 'Мероприятия']
@@ -23,7 +26,12 @@ def now():
 def create_app(test_config=None):
     app = Flask(__name__, static_folder='static')
     app.config.update(DATABASE=os.path.join(app.instance_path, 'svobodno.sqlite'), SESSION_COOKIE_HTTPONLY=True,
-                      SESSION_COOKIE_SAMESITE='Lax', MAX_CONTENT_LENGTH=1024 * 1024)
+                      SESSION_COOKIE_SAMESITE='Lax', SESSION_COOKIE_SECURE=os.environ.get('COOKIE_SECURE', '').lower() in ('1', 'true', 'yes'), MAX_CONTENT_LENGTH=1024 * 1024,
+                      SMTP_HOST=os.environ.get('SMTP_HOST', ''), SMTP_PORT=int(os.environ.get('SMTP_PORT', '587')),
+                      SMTP_USERNAME=os.environ.get('SMTP_USERNAME', ''), SMTP_PASSWORD=os.environ.get('SMTP_PASSWORD', ''),
+                      SMTP_FROM_EMAIL=os.environ.get('SMTP_FROM_EMAIL', ''), SMTP_FROM_NAME=os.environ.get('SMTP_FROM_NAME', 'Свободно.'),
+                      APP_BASE_URL=os.environ.get('APP_BASE_URL', 'http://127.0.0.1:5000'),
+                      PASSWORD_RESET_TTL_MINUTES=30, PASSWORD_RESET_LIMIT=3, PASSWORD_RESET_WINDOW_MINUTES=60)
     if test_config:
         app.config.update(test_config)
     Path(app.instance_path).mkdir(exist_ok=True)
@@ -80,6 +88,7 @@ def create_app(test_config=None):
         return fail('Некорректный запрос')
 
     @app.route('/')
+    @app.route('/reset-password')
     def index():
         return send_from_directory(app.static_folder, 'index.html')
 
@@ -117,6 +126,57 @@ def create_app(test_config=None):
         session.update(uid=uid, csrf=secrets.token_hex(24))
         return current()
 
+    @app.post('/api/password-reset/request')
+    def request_password_reset():
+        data = request.get_json()
+        email = str(data.get('email', '')).strip().lower()
+        if len(email) > 120 or not re.fullmatch(r'[^\\s@]+@[^\\s@]+\\.[^\\s@]+', email):
+            return fail('Укажите корректный адрес электронной почты')
+        ip = request.remote_addr or 'unknown'
+        email_hash = hashlib.sha256(email.encode('utf-8')).hexdigest()
+        current_time = now()
+        cutoff = (current_time - timedelta(minutes=app.config['PASSWORD_RESET_WINDOW_MINUTES'])).isoformat()
+        with db() as c:
+            c.execute('DELETE FROM password_reset_requests WHERE created_at < ?', (cutoff,))
+            count = c.execute('SELECT COUNT(*) FROM password_reset_requests WHERE ip_address=? OR email_hash=?', (ip, email_hash)).fetchone()[0]
+            if count >= app.config['PASSWORD_RESET_LIMIT']:
+                return jsonify(message='Если адрес зарегистрирован, инструкция будет отправлена на почту'), 200
+            c.execute('INSERT INTO password_reset_requests(ip_address,email_hash,created_at) VALUES(?,?,?)', (ip, email_hash, current_time.isoformat()))
+            user = c.execute('SELECT id,email,name FROM users WHERE email=?', (email,)).fetchone()
+            if user:
+                raw_token = secrets.token_urlsafe(32)
+                token_hash = hashlib.sha256(raw_token.encode('utf-8')).hexdigest()
+                expires = (current_time + timedelta(minutes=app.config['PASSWORD_RESET_TTL_MINUTES'])).isoformat()
+                c.execute('DELETE FROM password_reset_tokens WHERE user_id=?', (user['id'],))
+                c.execute('INSERT INTO password_reset_tokens(user_id,token_hash,expires_at,created_at) VALUES(?,?,?,?)', (user['id'], token_hash, expires, current_time.isoformat()))
+        if user:
+            link = app.config['APP_BASE_URL'].rstrip('/') + '/reset-password?token=' + raw_token
+            try:
+                sender = app.config.get('MAIL_SENDER') or send_recovery_email
+                sender(app.config, user['email'], user['name'], link)
+            except Exception:
+                app.logger.warning('Password recovery email could not be sent')
+        return jsonify(message='Если адрес зарегистрирован, инструкция будет отправлена на почту'), 200
+
+    @app.post('/api/password-reset/confirm')
+    def confirm_password_reset():
+        data = request.get_json()
+        token, password = str(data.get('token', '')), str(data.get('password', ''))
+        confirmation = str(data.get('confirmation', ''))
+        if not token or len(token) > 256:
+            return fail('Ссылка восстановления недействительна или устарела', 400)
+        if not 8 <= len(password) <= 128 or password != confirmation:
+            return fail('Пароль должен содержать от 8 до 128 символов, а подтверждение должно совпадать')
+        token_hash = hashlib.sha256(token.encode('utf-8')).hexdigest()
+        with db() as c:
+            c.execute('BEGIN IMMEDIATE')
+            row = c.execute('SELECT user_id FROM password_reset_tokens WHERE token_hash=? AND expires_at>?', (token_hash, now().isoformat())).fetchone()
+            if not row:
+                return fail('Ссылка восстановления недействительна или устарела', 400)
+            c.execute('UPDATE users SET password=? WHERE id=?', (generate_password_hash(password), row['user_id']))
+            c.execute('DELETE FROM password_reset_tokens WHERE user_id=?', (row['user_id'],))
+        session.clear()
+        return jsonify(ok=True, message='Пароль успешно изменён. Теперь войдите с новым паролем')
     @app.post('/api/logout')
     def logout():
         session.clear()
