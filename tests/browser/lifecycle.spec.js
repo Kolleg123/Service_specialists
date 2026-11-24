@@ -80,6 +80,10 @@ test('client and assigned master agree on the full timed booking lifecycle', asy
     await expect(row.locator('.badge')).toHaveText('Завершена');
     await expect(row.getByRole('button',{name:'Оставить отзыв'})).toBeVisible();
     expect((await post(specialist,`/api/bookings/${booking.id}/complete`,{})).status()).toBe(409);
+    const bell=page.getByRole('button',{name:/^Уведомления/});
+    await bell.click();
+    await expect(page.locator('#notifications-panel')).toContainText('Встреча завершена');
+    await bell.press('Escape');
     await row.getByRole('button',{name:'Оставить отзыв'}).click();
     await page.getByLabel('Ваш отзыв').fill('Услуга завершилась вовремя, всё отлично!');
     await page.getByRole('button',{name:'Отправить отзыв'}).click();

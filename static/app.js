@@ -73,6 +73,86 @@ function login(after=null,register=false) {
  $$('[data-demo]').forEach(b=>b.onclick=()=>submit({email:b.dataset.demo+'@svobodno.demo',password:'Demo2026!'}));
  $('#auth-switch').onclick=()=>login(after,!register);
 }
+function bindNotifications(user) {
+ const toggle=$('#notifications-toggle'), panel=$('#notifications-panel');
+ const count=$('.notification-count',toggle);
+ const isCurrent=()=>panel.isConnected && state.user===user && location.hash==='#dashboard';
+ let notifications=[];
+ let busy=false;
+
+ function render() {
+  const unread=notifications.filter(n=>!n.is_read).length;
+  count.textContent=unread;
+  count.classList.toggle('hidden',!unread);
+  toggle.setAttribute('aria-label',unread?`Уведомления, непрочитанных: ${unread}`:'Уведомления');
+  panel.innerHTML=`<div class="notification-panel-head">
+   <div><strong>Уведомления</strong><span role="status">${unread?`Непрочитанных: ${unread}`:'Непрочитанных нет'}</span></div>
+   <button id="notifications-mark-read" class="text-button" ${unread?'':'disabled'}>Прочитать всё</button>
+  </div><div class="notification-list">${notifications.length?notifications.map(n=>`
+   <article class="notification-item ${n.is_read?'read':'unread'}">
+    <span class="notification-dot ${n.event==='cancelled'?'warning':'success'}" aria-hidden="true"></span>
+    <div class="notification-copy"><strong>${esc(n.message)}</strong>
+     <small>${date(n.created_at.slice(0,10)+'T12:00:00')} · ${time(n.created_at)} (Киров)</small>
+     ${n.is_read?'<small>Прочитано</small>':`<button class="text-button" data-read-notification="${esc(n.id)}">Отметить прочитанным</button>`}
+    </div>
+   </article>`).join(''):'<p class="notification-status">Уведомлений пока нет.</p>'}</div>`;
+ }
+
+ async function load() {
+  if(busy)return;
+  busy=true;
+  panel.innerHTML='<p class="notification-status" role="status">Загружаем уведомления…</p>';
+  try {
+   const result=await api('/notifications');
+   if(!isCurrent())return;
+   notifications=result.notifications;
+   render();
+  } catch(error) {
+   if(isCurrent()){
+    panel.innerHTML='<p class="notification-status" role="status"></p>';
+    $('p',panel).textContent=error.message;
+   }
+  } finally {busy=false;}
+ }
+
+ function setOpen(open) {
+  panel.classList.toggle('hidden',!open);
+  toggle.setAttribute('aria-expanded',String(open));
+ }
+ toggle.onclick=()=>{
+  const open=panel.classList.contains('hidden');
+  setOpen(open);
+  if(open)load();
+ };
+ toggle.parentElement.onkeydown=event=>{
+  if(event.key==='Escape'&&!panel.classList.contains('hidden')){
+   setOpen(false);
+   toggle.focus();
+  }
+ };
+ panel.onclick=async event=>{
+  const button=event.target.closest('button');
+  if(!button||busy)return;
+  const items=notifications.filter(n=>!n.is_read &&
+   (button.id==='notifications-mark-read'||String(n.id)===button.dataset.readNotification));
+  if(!items.length)return;
+  busy=true;
+  $$('button',panel).forEach(control=>control.disabled=true);
+  try {
+   const results=await Promise.allSettled(items.map(async n=>{
+    await api('/notifications/'+n.id+'/read',{});
+    n.is_read=true;
+   }));
+   if(!isCurrent())return;
+   render();
+   const failure=results.find(result=>result.status==='rejected');
+   if(failure)toast(failure.reason.message);
+   if(!panel.classList.contains('hidden'))toggle.focus();
+  } finally {busy=false;}
+ };
+ load();
+}
+
 function bookingActions(booking) {
  const buttons = [];
  if (booking.actions.cancel) buttons.push(`<button data-cancel="${booking.id}" class="text-button danger">Отменить запись</button>`);
@@ -102,11 +182,12 @@ async function dashboard() {
  if (requestId !== dashboardRequest || state.user !== user || location.hash !== '#dashboard') return;
  const isClient=user.role==='client', isMaster=user.role==='master', isAdmin=user.role==='admin';
  const tabs=isClient?[['bookings','Мои записи'],['searches','История поиска'],['reviews','Мои отзывы']]:isMaster?[['bookings','Записи клиентов'],['schedule','Моё расписание'],['services','Мои услуги']]:[['bookings','Все записи'],['moderation','Модерация отзывов'],['people','Специалисты и услуги']];
- if(!isAdmin)tabs.push(['notifications','Уведомления']);
  if(!tabs.some(x=>x[0]===dashboardTab))dashboardTab='bookings';
- $('#app').innerHTML=`<section class="dashboard"><div class="dashboard-heading"><div><span class="eyebrow">${isClient?'ЛИЧНЫЙ КАБИНЕТ':isMaster?'КАБИНЕТ СПЕЦИАЛИСТА':'АДМИНИСТРИРОВАНИЕ'}</span><h1>Здравствуйте, ${esc(user.name.split(' ')[0])}<span class="wave">✧</span></h1><p class="muted">${isClient?'Встречи, которые делают жизнь проще.':isMaster?'Ваше время, ваши услуги и ваши клиенты.':'Управляйте качеством сервиса и публикациями.'}</p></div><button id="logout" class="button outline">Выйти ↗</button></div><div class="stats"><div><span>${isClient?'Предстоящих встреч':'Активных записей'}</span><strong>${data.bookings.filter(b=>isClient?b.phase==='upcoming':b.status==='confirmed').length}</strong></div><div><span>Завершённых встреч</span><strong>${data.bookings.filter(b=>b.status==='completed').length}</strong></div><div><span>${isAdmin?'На модерации':'Всего записей'}</span><strong>${isAdmin?data.reviews.filter(r=>r.status==='pending').length:data.bookings.length}</strong></div></div><div class="dashboard-tabs">${tabs.map(([id,t])=>`<button data-tab="${id}" class="${dashboardTab===id?'selected':''}">${t}</button>`).join('')}</div><div id="dashboard-content"></div></section>`;
+ const notificationControl=isAdmin?'':`<div class="notification-control"><button id="notifications-toggle" class="button outline notification-trigger" aria-label="Уведомления" aria-expanded="false" aria-controls="notifications-panel"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 9a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9M10 21h4"/></svg><span>Уведомления</span><span class="notification-count hidden" aria-hidden="true"></span></button><div id="notifications-panel" class="notification-panel hidden" aria-label="Список уведомлений"></div></div>`;
+ $('#app').innerHTML=`<section class="dashboard"><div class="dashboard-heading"><div><span class="eyebrow">${isClient?'ЛИЧНЫЙ КАБИНЕТ':isMaster?'КАБИНЕТ СПЕЦИАЛИСТА':'АДМИНИСТРИРОВАНИЕ'}</span><h1>Здравствуйте, ${esc(user.name.split(' ')[0])}<span class="wave">✧</span></h1><p class="muted">${isClient?'Встречи, которые делают жизнь проще.':isMaster?'Ваше время, ваши услуги и ваши клиенты.':'Управляйте качеством сервиса и публикациями.'}</p></div><div class="dashboard-actions">${notificationControl}<button id="logout" class="button outline">Выйти ↗</button></div></div><div class="stats"><div><span>${isClient?'Предстоящих встреч':'Активных записей'}</span><strong>${data.bookings.filter(b=>isClient?b.phase==='upcoming':b.status==='confirmed').length}</strong></div><div><span>Завершённых встреч</span><strong>${data.bookings.filter(b=>b.status==='completed').length}</strong></div><div><span>${isAdmin?'На модерации':'Всего записей'}</span><strong>${isAdmin?data.reviews.filter(r=>r.status==='pending').length:data.bookings.length}</strong></div></div><div class="dashboard-tabs">${tabs.map(([id,t])=>`<button data-tab="${id}" class="${dashboardTab===id?'selected':''}">${t}</button>`).join('')}</div><div id="dashboard-content"></div></section>`;
  $('#logout').onclick=async()=>{const r=await api('/logout',{});state.user=null;state.csrf=r.csrf;dashboardTab='bookings';dashboardStatusFilter='all';clearTimeout(dashboardRefreshTimer);updateAccount();location.hash='catalog';catalog();};
  $$('[data-tab]').forEach(b=>b.onclick=()=>{dashboardTab=b.dataset.tab;dashboard().catch(e=>toast(e.message));});
+ if(!isAdmin)bindNotifications(user);
  const root=$('#dashboard-content');
  if(dashboardTab==='bookings'){
   root.innerHTML=`<div class="section-title"><h2>${isClient?'Мои встречи':'История записей'}</h2><select id="booking-status" aria-label="Статус записи"><option value="all">Все записи</option><option value="confirmed">Активные</option><option value="completed">Завершённые</option><option value="cancelled">Отменённые</option></select></div><div class="dashboard-update"><p>Время Кирова · UTC+3. Статус и действия проверяет сервер.</p><button id="refresh-bookings" class="button outline">Обновить статусы</button><p id="dashboard-update-status" role="status"></p></div><div id="booking-list"></div>`;
@@ -119,23 +200,6 @@ async function dashboard() {
    $$('[data-complete]').forEach(b=>b.onclick=async()=>{b.disabled=true;try{await api('/bookings/'+b.dataset.complete+'/complete',{});toast('Встреча завершена');}catch(e){toast(e.message);}finally{await dashboard();}});
    $$('[data-review]').forEach(b=>b.onclick=()=>reviewForm(Number(b.dataset.review)));
   };$('#booking-status').onchange=()=>{dashboardStatusFilter=$('#booking-status').value;draw();};draw();scheduleDashboardRefresh();
- }else if(dashboardTab==='notifications'){
-  const {notifications}=await api('/notifications');
-  if (requestId !== dashboardRequest || state.user !== user || location.hash !== '#dashboard') return;
-  root.innerHTML='<h2>Уведомления</h2>'+(notifications.length?notifications.map(n=>
-   `<article class="panel"><p>${esc(n.message)}</p><small>${date(n.created_at)} · ${time(n.created_at)} (Киров)</small>
-   ${n.is_read?'<p class="muted">Прочитано</p>':`<button class="text-button" data-read-notification="${n.id}">Отметить прочитанным</button>`}</article>`
-  ).join(''):'<p class="empty">Уведомлений пока нет.</p>');
-  $$('[data-read-notification]',root).forEach(button=>button.onclick=async()=>{
-   button.disabled=true;
-   try{
-    await api('/notifications/'+button.dataset.readNotification+'/read',{});
-    const label=document.createElement('p');
-    label.className='muted';
-    label.textContent='Прочитано';
-    button.replaceWith(label);
-   }catch(error){button.disabled=false;toast(error.message);}
-  });
  }else if(dashboardTab==='searches'){
   root.innerHTML='<h2>Недавно вы искали</h2>'+(data.searches.length?data.searches.map(s=>`<button class="search-history" data-query-history="${esc(s.query)}"><span>⌕ &nbsp; ${esc(s.query)}</span><small>${date(s.created_at)}</small><span>↗</span></button>`).join(''):'<div class="empty">Ваши поисковые запросы появятся здесь.</div>');
   $$('[data-query-history]').forEach(b=>b.onclick=()=>{state.query=b.dataset.queryHistory;state.category='Все специалисты';state.mode='';state.maxPrice='';location.hash='catalog';});
