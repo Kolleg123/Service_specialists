@@ -56,7 +56,13 @@ test('booking, cancellation, review, moderation, schedule and consultation', asy
   // Service categories are required; choose the first active category in the form.
   await page.locator('#service-form [name="categories"]').first().check();
   await page.getByRole('button', { name: 'Добавить услугу' }).click();
-  await expect(page.getByRole('heading', { name: 'Проверка сантехнического оборудования' })).toBeVisible();
+  const createdService = page.locator('.service-row').filter({ hasText: 'Проверка сантехнического оборудования' });
+  await expect(createdService).toContainText('Дом и ремонт');
+  await createdService.getByRole('button', { name: 'Изменить' }).click();
+  await page.locator('#edit-service-form [name="categories"][value="Дом и ремонт"]').uncheck();
+  await page.locator('#edit-service-form [name="categories"][value="Красота"]').check();
+  await page.getByRole('button', { name: 'Сохранить изменения' }).click();
+  await expect(page.locator('.service-row').filter({ hasText: 'Проверка сантехнического оборудования' })).toContainText('Красота');
   await page.getByRole('button', { name: 'Моё расписание' }).click();
   const future = new Date(Date.now() + 25 * 86400000).toISOString().slice(0, 10) + 'T10:00';
   await page.getByLabel('Дата и время').fill(future);
