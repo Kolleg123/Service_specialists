@@ -1,4 +1,6 @@
 from concurrent.futures import ThreadPoolExecutor
+import base64
+from pathlib import Path
 from datetime import timedelta
 import sqlite3
 
@@ -237,3 +239,32 @@ def test_confirmation_snapshot_is_checked_atomically(app, field, value):
     slot = c.get('/api/slots/1').json['slots'][0]
     r = post(c, '/bookings', {'slot_id': slot['id'], 'address': 'Киров, Ленина 10', field: value})
     assert r.status_code == 409 and 'Условия записи изменились' in r.json['error']
+
+
+def test_service_categories_filter_and_admin_directory(app):
+    admin = client(app, 'admin')
+    categories = admin.get('/api/categories').json['categories']
+    assert {item['name'] for item in categories} == {'Дом и ремонт', 'Красота', 'Обучение', 'Здоровье', 'Мероприятия'}
+    home = next(item for item in categories if item['name'] == 'Дом и ремонт')
+    catalog = admin.get(f"/api/catalog?category_id={home['id']}").json
+    assert {s['name'] for s in catalog['specialists']} == {'Алексей Морозов', 'Михаил Волков'}
+    assert all(all(service['category_id'] == home['id'] for service in s['services']) for s in catalog['specialists'])
+    assert post(admin, '/admin/categories', {'name': 'Новая категория'}).status_code == 201
+    assert post(admin, '/admin/categories', {'name': 'Новая категория'}).status_code == 409
+
+
+def test_master_photo_upload_and_replacement(app):
+    master = client(app, 'master')
+    first_bytes = bytes.fromhex('89504e470d0a1a0a') + b'first-test-image'
+    second_bytes = bytes.fromhex('89504e470d0a1a0a') + b'second-test-image'
+    first = post(master, '/master/photo', {'image': base64.b64encode(first_bytes).decode()})
+    assert first.status_code == 200
+    first_path = Path(app.static_folder) / first.json['photo'].removeprefix('/static/')
+    assert first_path.read_bytes() == first_bytes
+    second = post(master, '/master/photo', {'image': base64.b64encode(second_bytes).decode()})
+    assert second.status_code == 200
+    second_path = Path(app.static_folder) / second.json['photo'].removeprefix('/static/')
+    assert second_path.read_bytes() == second_bytes
+    assert not first_path.exists()
+    assert master.get('/api/catalog').json['specialists'][0]['photo'] == second.json['photo']
+    assert post(master, '/master/photo', {'image': base64.b64encode(b'<svg/>').decode()}).status_code == 400

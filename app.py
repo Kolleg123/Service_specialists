@@ -1,8 +1,10 @@
+import base64
 import hashlib
 import os
 import re
 import secrets
 import sqlite3
+import uuid
 from datetime import datetime, timedelta
 from pathlib import Path
 from functools import wraps
@@ -200,18 +202,31 @@ def create_app(test_config=None):
         session.clear()
         return current()
 
+    @app.get('/api/categories')
+    def categories():
+        with db() as c:
+            rows = c.execute('SELECT id,name,slug FROM service_categories WHERE active=1 ORDER BY id').fetchall()
+        return jsonify(categories=[dict(row) for row in rows])
+
     @app.get('/api/catalog')
     def catalog():
+        category_id = request.args.get('category_id', type=int)
         with db() as c:
             specialists = []
             for row in c.execute('SELECT * FROM specialists WHERE active=1 ORDER BY id'):
                 s = dict(row)
-                s['services'] = [dict(r) for r in c.execute('SELECT * FROM services WHERE specialist_id=? AND active=1', (s['id'],))]
+                s['services'] = [dict(r) for r in c.execute('SELECT v.*,c.name category_name,c.slug category_slug FROM services v LEFT JOIN service_categories c ON c.id=v.category_id WHERE v.specialist_id=? AND v.active=1 AND c.active=1', (s['id'],))]
+                if category_id is not None:
+                    s['services'] = [v for v in s['services'] if v['category_id'] == category_id]
+                if not s['services']:
+                    continue
+                s['service_categories'] = sorted({v['category_name'] for v in s['services'] if v['category_name']})
                 s['reviews'] = [dict(r) for r in c.execute('SELECT r.*,u.name FROM reviews r JOIN users u ON r.user_id=u.id WHERE r.specialist_id=? AND r.status="approved" ORDER BY r.id DESC', (s['id'],))]
                 s['rating'] = round(sum(r['rating'] for r in s['reviews']) / len(s['reviews']), 1) if s['reviews'] else None
                 s['next_slot'] = c.execute('SELECT MIN(starts_at) FROM slots WHERE specialist_id=? AND starts_at>? AND active=1', (s['id'], now().isoformat(timespec='minutes'))).fetchone()[0]
                 specialists.append(s)
-        return jsonify(specialists=specialists, categories=CATEGORIES, timezone='Europe/Kirov')
+            category_rows = c.execute('SELECT name FROM service_categories WHERE active=1 ORDER BY id').fetchall()
+        return jsonify(specialists=specialists, categories=['Все специалисты'] + [r['name'] for r in category_rows], timezone='Europe/Kirov')
 
     @app.get('/api/slots/<int:specialist_id>')
     def slots(specialist_id):
@@ -357,11 +372,18 @@ def create_app(test_config=None):
     def add_service(user):
         d = request.get_json()
         title, mode = str(d.get('title', '')).strip(), d.get('mode')
+        category_id = d.get('category_id')
         price, duration = d.get('price'), d.get('duration')
         if not 3 <= len(title) <= 100 or mode not in ['Выезд', 'У специалиста', 'Онлайн', 'Группа'] or type(price) is not int or not 0 <= price <= 1000000 or type(duration) is not int or not 15 <= duration <= 480:
             return fail('Проверьте название, формат, стоимость и длительность (15–480 минут)')
         with db() as c:
-            c.execute('INSERT INTO services(specialist_id,title,price,duration,mode) VALUES(?,?,?,?,?)', (user['specialist_id'], title, price, duration, mode))
+            category = c.execute('SELECT id FROM service_categories WHERE id=? AND active=1', (category_id,)).fetchone() if type(category_id) is int else None
+            if category_id is None:
+                category = c.execute('SELECT id FROM service_categories WHERE name=(SELECT category FROM specialists WHERE id=?) AND active=1', (user['specialist_id'],)).fetchone()
+                category_id = category['id'] if category else None
+            if not category:
+                return fail('Выберите действующую категорию услуги')
+            c.execute('INSERT INTO services(specialist_id,title,price,duration,mode,category_id) VALUES(?,?,?,?,?,?)', (user['specialist_id'], title, price, duration, mode, category_id))
         return jsonify(ok=True), 201
 
     @app.post('/api/master/slots')
@@ -415,7 +437,59 @@ def create_app(test_config=None):
     def admin(user):
         with db() as c:
             return jsonify(specialists=[dict(r) for r in c.execute('SELECT * FROM specialists')],
-                           services=[dict(r) for r in c.execute('SELECT v.*,p.name specialist FROM services v JOIN specialists p ON p.id=v.specialist_id')])
+                           services=[dict(r) for r in c.execute('SELECT v.*,p.name specialist,c.name category_name FROM services v JOIN specialists p ON p.id=v.specialist_id LEFT JOIN service_categories c ON c.id=v.category_id')],
+                           categories=[dict(r) for r in c.execute('SELECT * FROM service_categories ORDER BY id')])
+
+    @app.post('/api/admin/categories')
+    @auth('admin')
+    def create_category(user):
+        name = str(request.get_json().get('name', '')).strip()
+        slug = 'category-' + secrets.token_hex(8)
+        if not 2 <= len(name) <= 60:
+            return fail('Название категории должно содержать от 2 до 60 символов')
+        try:
+            with db() as c:
+                ident = c.execute('INSERT INTO service_categories(name,slug) VALUES(?,?)', (name, slug)).lastrowid
+        except sqlite3.IntegrityError:
+            return fail('Такая категория уже существует', 409)
+        return jsonify(id=ident, name=name, slug=slug), 201
+
+    @app.post('/api/master/photo')
+    @auth('master')
+    def upload_master_photo(user):
+        encoded = str(request.get_json().get('image', ''))
+        if len(encoded) > 900000:
+            return fail('Изображение слишком большое (максимум 650 КБ)')
+        try:
+            raw = base64.b64decode(encoded, validate=True)
+        except (ValueError, TypeError):
+            return fail('Не удалось прочитать изображение')
+        if not raw or len(raw) > 650 * 1024:
+            return fail('Изображение должно быть не больше 650 КБ')
+        if raw.startswith(bytes.fromhex('ffd8ff')):
+            extension = 'jpg'
+        elif raw.startswith(bytes.fromhex('89504e470d0a1a0a')):
+            extension = 'png'
+        elif len(raw) >= 12 and raw[:4] == b'RIFF' and raw[8:12] == b'WEBP':
+            extension = 'webp'
+        else:
+            return fail('Поддерживаются только JPEG, PNG и WebP')
+        with db() as c:
+            specialist = c.execute('SELECT photo FROM specialists WHERE id=?', (user['specialist_id'],)).fetchone()
+            if not specialist:
+                return fail('Профиль специалиста не найден', 404)
+            upload_dir = Path(app.static_folder) / 'uploads'
+            upload_dir.mkdir(parents=True, exist_ok=True)
+            filename = uuid.uuid4().hex + '.' + extension
+            (upload_dir / filename).write_bytes(raw)
+            photo_url = '/static/uploads/' + filename
+            c.execute('UPDATE specialists SET photo=? WHERE id=?', (photo_url, user['specialist_id']))
+            old_photo = specialist['photo'] or ''
+        if old_photo.startswith('/static/uploads/'):
+            old_path = (Path(app.static_folder) / 'uploads' / old_photo.rsplit('/', 1)[-1]).resolve()
+            if old_path.parent == (Path(app.static_folder) / 'uploads').resolve() and old_path.name != filename:
+                old_path.unlink(missing_ok=True)
+        return jsonify(ok=True, photo=photo_url)
 
     @app.post('/api/admin/moderate')
     @auth('admin')

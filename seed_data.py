@@ -5,7 +5,8 @@ from werkzeug.security import generate_password_hash
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS specialists(id INTEGER PRIMARY KEY,name TEXT,profession TEXT,category TEXT,experience INTEGER,education TEXT,skills TEXT,bio TEXT,photo TEXT,location TEXT,active INTEGER DEFAULT 1);
 CREATE TABLE IF NOT EXISTS users(id INTEGER PRIMARY KEY,name TEXT,email TEXT UNIQUE,password TEXT,role TEXT,specialist_id INTEGER REFERENCES specialists(id));
-CREATE TABLE IF NOT EXISTS services(id INTEGER PRIMARY KEY,specialist_id INTEGER REFERENCES specialists(id),title TEXT,price INTEGER,duration INTEGER,mode TEXT,active INTEGER DEFAULT 1);
+CREATE TABLE IF NOT EXISTS service_categories(id INTEGER PRIMARY KEY,name TEXT NOT NULL UNIQUE,slug TEXT NOT NULL UNIQUE,active INTEGER NOT NULL DEFAULT 1);
+CREATE TABLE IF NOT EXISTS services(id INTEGER PRIMARY KEY,specialist_id INTEGER REFERENCES specialists(id),title TEXT,price INTEGER,duration INTEGER,mode TEXT,active INTEGER DEFAULT 1,category_id INTEGER REFERENCES service_categories(id));
 CREATE TABLE IF NOT EXISTS slots(id INTEGER PRIMARY KEY,specialist_id INTEGER REFERENCES specialists(id),service_id INTEGER REFERENCES services(id),starts_at TEXT,capacity INTEGER CHECK(capacity>0),active INTEGER DEFAULT 1);
 CREATE TABLE IF NOT EXISTS bookings(id INTEGER PRIMARY KEY,user_id INTEGER REFERENCES users(id),slot_id INTEGER REFERENCES slots(id),quantity INTEGER CHECK(quantity>0),address TEXT,note TEXT,status TEXT,created_at TEXT,total INTEGER);
 CREATE TABLE IF NOT EXISTS notifications(
@@ -135,6 +136,9 @@ def ensure(connection, key, table, match, values, preferred_id=None):
 
 def initialize_database(connection, current_time):
     connection.executescript(SCHEMA)
+    service_columns = {row['name'] for row in connection.execute('PRAGMA table_info(services)')}
+    if 'category_id' not in service_columns:
+        connection.execute('ALTER TABLE services ADD COLUMN category_id INTEGER REFERENCES service_categories(id)')
     connection.execute('BEGIN IMMEDIATE')
     specialist_ids = {}
     for index, person in enumerate(PEOPLE, 1):
@@ -160,6 +164,16 @@ def initialize_database(connection, current_time):
         service_ids[index] = ensure(connection, f'service:{index}', 'services',
                                     {'specialist_id': values['specialist_id'], 'title': title}, values, index)
 
+    category_names = ['Дом и ремонт', 'Красота', 'Обучение', 'Здоровье', 'Мероприятия']
+    category_slugs = {'Дом и ремонт':'home-repair', 'Красота':'beauty', 'Обучение':'education', 'Здоровье':'health', 'Мероприятия':'events'}
+    category_ids = {}
+    for category_name in category_names:
+        slug = category_slugs[category_name]
+        connection.execute('INSERT OR IGNORE INTO service_categories(name,slug) VALUES(?,?)', (category_name, slug))
+        category_ids[category_name] = connection.execute('SELECT id FROM service_categories WHERE slug=?', (slug,)).fetchone()['id']
+    for index, definition in enumerate(SERVICES, 1):
+        category_name = PEOPLE[definition[0] - 1][2]
+        connection.execute('UPDATE services SET category_id=? WHERE id=? AND category_id IS NULL', (category_ids[category_name], service_ids[index]))
     anchor_row = connection.execute("SELECT value FROM seed_meta WHERE name='anchor_date'").fetchone()
     if anchor_row:
         anchor = datetime.fromisoformat(anchor_row['value'])

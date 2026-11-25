@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Проверка категорий и фото</title>
+<style>
+body{font:15px system-ui,sans-serif;max-width:900px;margin:30px auto;padding:0 18px;color:#18313a;background:#f5faf8}
+section{background:white;border:1px solid #d9e8e3;border-radius:12px;padding:20px;margin:18px 0}
+label{display:block;margin:12px 0}input,select,button{font:inherit;padding:9px;border:1px solid #b9cec7;border-radius:7px}
+button{background:#148f7d;color:white;border:0;cursor:pointer}img{max-width:240px;max-height:180px;display:block;margin:10px 0}
+.row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}.muted{color:#617770}.result{white-space:pre-wrap}
+</style></head><body>
+<h1>Проверка категорий и фотографий</h1>
+<p class="muted">Черновая страница. Вход используйте через демо-аккаунты приложения.</p>
+<section><h2>Вход</h2><select id="role"><option value="admin">Администратор</option><option value="master">Мастер</option></select><button id="login">Войти</button><p id="session" class="result">Не авторизован</p></section>
+<section><h2>Справочник категорий</h2><div class="row"><input id="new-category" maxlength="60" placeholder="Название категории"><button id="add">Добавить</button></div><ul id="categories"></ul></section>
+<section><h2>Фильтр специалистов</h2><select id="filter"></select><button id="show">Показать</button><div id="catalog"></div></section>
+<section><h2>Фото профиля мастера</h2><p class="muted">JPEG, PNG или WebP до 650 КБ. Повторное сохранение заменяет ранее загруженное фото.</p><input id="file" type="file" accept="image/jpeg,image/png,image/webp"><img id="preview" hidden alt="Предпросмотр"><button id="save" disabled>Сохранить / заменить фото</button><p id="photo-status" class="result"></p></section>
+<script>
+let csrf='';
+async function api(path,data){const response=await fetch('/api'+path,{method:data===undefined?'GET':'POST',headers:{'Content-Type':'application/json','X-CSRF-Token':csrf},body:data===undefined?undefined:JSON.stringify(data)});const result=await response.json();if(!response.ok)throw Error(result.error||'Ошибка');return result}
+async function loadCategories(){const d=await api('/categories');document.querySelector('#categories').innerHTML=d.categories.map(c=>'<li>'+c.name+'</li>').join('');document.querySelector('#filter').innerHTML='<option value="">Все специалисты</option>'+d.categories.map(c=>'<option value="'+c.id+'">'+c.name+'</option>').join('')}
+document.querySelector('#login').onclick=async()=>{try{const s=await api('/session');csrf=s.csrf;const role=document.querySelector('#role').value;const d=await api('/login',{email:role+'@svobodno.demo',password:'Demo2026!'});csrf=d.csrf;document.querySelector('#session').textContent=d.user.name+' · '+d.user.role;await loadCategories()}catch(e){document.querySelector('#session').textContent=e.message}};
+document.querySelector('#add').onclick=async()=>{try{const d=await api('/admin/categories',{name:document.querySelector('#new-category').value});document.querySelector('#session').textContent='Добавлена категория: '+d.name;document.querySelector('#new-category').value='';await loadCategories()}catch(e){document.querySelector('#session').textContent=e.message}};
+document.querySelector('#show').onclick=async()=>{try{const id=document.querySelector('#filter').value;const d=await api('/catalog'+(id?'?category_id='+id:''));document.querySelector('#catalog').innerHTML=d.specialists.map(s=>'<p><b>'+s.name+'</b> — '+s.services.map(v=>v.title+' ('+v.category_name+')').join(', ')+'</p>').join('')||'Специалисты не найдены'}catch(e){document.querySelector('#catalog').textContent=e.message}};
+let file;document.querySelector('#file').onchange=e=>{file=e.target.files[0];const p=document.querySelector('#preview');if(file){p.src=URL.createObjectURL(file);p.hidden=false;document.querySelector('#save').disabled=false}else{p.hidden=true;document.querySelector('#save').disabled=true}};
+document.querySelector('#save').onclick=async()=>{try{if(!file||file.size>650*1024)throw Error('Выберите изображение до 650 КБ');const image=await new Promise((resolve,reject)=>{const reader=new FileReader();reader.onload=()=>resolve(String(reader.result).split(',')[1]);reader.onerror=reject;reader.readAsDataURL(file)});const d=await api('/master/photo',{image});document.querySelector('#photo-status').textContent='Сохранено: '+d.photo}catch(e){document.querySelector('#photo-status').textContent=e.message}};
+(async()=>{const s=await api('/session');csrf=s.csrf;await loadCategories()})().catch(e=>document.querySelector('#session').textContent=e.message);
+</script></body></html>
