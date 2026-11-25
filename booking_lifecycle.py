@@ -7,7 +7,8 @@ from booking_service import BookingError, parse_start
 
 def booking_interval(booking):
     start = parse_start(booking['starts_at'])
-    return start, start + timedelta(minutes=booking['duration'])
+    return start, (parse_start(booking['slot_ends_at']) if booking['slot_ends_at']
+                   else start + timedelta(minutes=booking['duration']))
 
 
 def booking_policy(booking, user, current_time, has_review=False):
@@ -44,7 +45,7 @@ def transition_booking(connection, user, booking_id, action, clock):
     # Reading status and updating it must be one serialized transaction, including
     # duplicate or concurrent requests. Terminal states are never reopened.
     connection.execute('BEGIN IMMEDIATE')
-    booking = connection.execute('''SELECT b.*,s.starts_at,s.specialist_id,v.duration
+    booking = connection.execute('''SELECT b.*,s.starts_at,s.ends_at slot_ends_at,s.specialist_id,v.duration
         FROM bookings b JOIN slots s ON s.id=b.slot_id
         JOIN services v ON v.id=s.service_id WHERE b.id=?''', (booking_id,)).fetchone()
     if not booking:

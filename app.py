@@ -12,6 +12,7 @@ from zoneinfo import ZoneInfo
 from dotenv import load_dotenv
 from flask import Flask, jsonify, request, session, send_from_directory
 from werkzeug.security import generate_password_hash, check_password_hash
+from booking_schedule import save_schedule, schedule_for
 from booking_service import BookingError, available_slots, create_booking
 from booking_lifecycle import booking_interval, booking_policy, transition_booking
 from password_recovery import send_recovery_email
@@ -202,14 +203,22 @@ def create_app(test_config=None):
 
     @app.get('/api/catalog')
     def catalog():
+        current_time = now()
         with db() as c:
             specialists = []
             for row in c.execute('SELECT * FROM specialists WHERE active=1 ORDER BY id'):
                 s = dict(row)
+                schedule = schedule_for(c, s['id'])
+                s['booking_mode'] = schedule['mode'] if schedule else 'manual'
                 s['services'] = [dict(r) for r in c.execute('SELECT * FROM services WHERE specialist_id=? AND active=1', (s['id'],))]
                 s['reviews'] = [dict(r) for r in c.execute('SELECT r.*,u.name FROM reviews r JOIN users u ON r.user_id=u.id WHERE r.specialist_id=? AND r.status="approved" ORDER BY r.id DESC', (s['id'],))]
                 s['rating'] = round(sum(r['rating'] for r in s['reviews']) / len(s['reviews']), 1) if s['reviews'] else None
-                s['next_slot'] = c.execute('SELECT MIN(starts_at) FROM slots WHERE specialist_id=? AND starts_at>? AND active=1', (s['id'], now().isoformat(timespec='minutes'))).fetchone()[0]
+                try:
+                    next_slot = next((slot for slot in available_slots(c, s['id'], current_time) if slot['remaining'] > 0), None)
+                except BookingError:
+                    next_slot = None
+                s['next_slot'] = next_slot['starts_at'] if next_slot else None
+                s['next_slot_mode'] = next_slot['booking_mode'] if next_slot else None
                 specialists.append(s)
         return jsonify(specialists=specialists, categories=CATEGORIES, timezone='Europe/Kirov')
 
@@ -219,12 +228,18 @@ def create_app(test_config=None):
         if service_id is not None:
             try:
                 service_id = int(service_id)
-                if service_id < 1:
+                if not 1 <= service_id < 2**63:
                     raise ValueError
             except ValueError:
                 return fail('Укажите корректную услугу')
-        with db() as c:
-            rows = available_slots(c, specialist_id, now(), service_id)
+        if specialist_id >= 2**63:
+            return jsonify(slots=[])
+        try:
+            with db() as c:
+                c.execute('BEGIN')
+                rows = list(available_slots(c, specialist_id, now(), service_id))
+        except BookingError as error:
+            return fail(str(error), error.status)
         return jsonify(slots=rows)
 
     @app.post('/api/bookings')
@@ -232,7 +247,7 @@ def create_app(test_config=None):
     def book(user):
         try:
             with db() as c:
-                ident = create_booking(c, user['id'], request.get_json(), now())
+                ident = create_booking(c, user['id'], request.get_json(), now)
         except BookingError as error:
             return fail(str(error), error.status)
         return jsonify(id=ident), 201
@@ -263,7 +278,8 @@ def create_app(test_config=None):
     def dashboard(user):
         where, params = ('b.user_id=?', (user['id'],)) if user['role'] == 'client' else ('s.specialist_id=?', (user['specialist_id'],)) if user['role'] == 'master' else ('1=1', ())
         with db() as c:
-            bookings = c.execute(f'''SELECT b.*,s.starts_at,s.specialist_id,s.capacity,v.title service,v.mode,v.duration,p.name specialist,p.photo,u.name client
+            bookings = c.execute(f'''SELECT b.*,s.starts_at,s.ends_at slot_ends_at,s.booking_mode,s.specialist_id,s.capacity,v.title service,v.mode,
+                CASE WHEN s.booking_mode='time' THEN ROUND((julianday(s.ends_at)-julianday(s.starts_at))*1440) ELSE v.duration END duration,p.name specialist,p.photo,u.name client
                 FROM bookings b JOIN slots s ON s.id=b.slot_id JOIN services v ON v.id=s.service_id
                 JOIN specialists p ON p.id=s.specialist_id JOIN users u ON u.id=b.user_id WHERE {where} ORDER BY s.starts_at DESC''', params).fetchall()
             searches = c.execute('SELECT * FROM searches WHERE user_id=? ORDER BY id DESC LIMIT 30', (user['id'],)).fetchall()
@@ -301,7 +317,7 @@ def create_app(test_config=None):
             return fail('Оцените от 1 до 5 и напишите отзыв от 5 до 1500 символов')
         with db() as c:
             c.execute('BEGIN IMMEDIATE')
-            b = c.execute('SELECT b.*,s.specialist_id,s.starts_at,v.duration FROM bookings b JOIN slots s ON s.id=b.slot_id JOIN services v ON v.id=s.service_id WHERE b.id=? AND b.user_id=? AND b.status="completed"', (d.get('booking_id'), user['id'])).fetchone()
+            b = c.execute('SELECT b.*,s.specialist_id,s.starts_at,s.ends_at slot_ends_at,v.duration FROM bookings b JOIN slots s ON s.id=b.slot_id JOIN services v ON v.id=s.service_id WHERE b.id=? AND b.user_id=? AND b.status="completed"', (d.get('booking_id'), user['id'])).fetchone()
             if not b:
                 return fail('Отзыв доступен после завершённой встречи', 403)
             if now() < booking_interval(b)[1]:
@@ -349,8 +365,26 @@ def create_app(test_config=None):
         with db() as c:
             services = c.execute('SELECT * FROM services WHERE specialist_id=?', (user['specialist_id'],)).fetchall()
             slots = c.execute('''SELECT s.*,v.title service,COALESCE((SELECT SUM(quantity) FROM bookings WHERE slot_id=s.id AND status='confirmed'),0) booked
-                FROM slots s JOIN services v ON v.id=s.service_id WHERE s.specialist_id=? AND s.starts_at>? ORDER BY s.starts_at''', (user['specialist_id'], now().isoformat(timespec='minutes'))).fetchall()
-        return jsonify(services=[dict(r) for r in services], slots=[dict(r) for r in slots])
+                FROM slots s JOIN services v ON v.id=s.service_id WHERE s.specialist_id=? AND s.booking_mode='manual' AND s.starts_at>? ORDER BY s.starts_at''', (user['specialist_id'], now().isoformat(timespec='minutes'))).fetchall()
+            schedule = schedule_for(c, user['specialist_id'])
+        result = dict(services=[dict(r) for r in services], slots=[dict(r) for r in slots])
+        if schedule:
+            result['schedule'] = schedule
+        return jsonify(result)
+
+    @app.post('/api/master/schedule')
+    @auth('master')
+    def update_schedule(user):
+        try:
+            with db() as c:
+                c.execute('BEGIN IMMEDIATE')
+                if not c.execute('SELECT 1 FROM specialists WHERE id=?', (user['specialist_id'],)).fetchone():
+                    return fail('Профиль специалиста не найден', 404)
+                save_schedule(c, user['specialist_id'], request.get_json())
+                schedule = schedule_for(c, user['specialist_id'])
+        except ValueError as error:
+            return fail(str(error))
+        return jsonify(schedule=schedule)
 
     @app.post('/api/master/services')
     @auth('master')
@@ -379,13 +413,15 @@ def create_app(test_config=None):
             return fail('Дата должна быть в ближайшем году, количество мест — от 1 до 50')
         with db() as c:
             c.execute('BEGIN IMMEDIATE')
+            if schedule_for(c, user['specialist_id']) is not None:
+                return fail('Для ручных слотов переключите режим расписания', 409)
             service = c.execute('SELECT * FROM services WHERE id=? AND specialist_id=? AND active=1', (d.get('service_id'), user['specialist_id'])).fetchone()
             if not service:
                 return fail('Услуга не найдена', 404)
             if service['mode'] != 'Группа' and cap != 1:
                 return fail('Несколько мест доступны только для групповой услуги')
             end = starts + timedelta(minutes=service['duration'])
-            existing = c.execute('SELECT s.starts_at,v.duration FROM slots s JOIN services v ON v.id=s.service_id WHERE s.specialist_id=? AND s.active=1', (user['specialist_id'],)).fetchall()
+            existing = c.execute('SELECT s.starts_at,v.duration FROM slots s JOIN services v ON v.id=s.service_id WHERE s.specialist_id=? AND s.active=1 AND s.booking_mode="manual"', (user['specialist_id'],)).fetchall()
             try:
                 occupied = [(datetime.fromisoformat(r['starts_at']), r['duration']) for r in existing]
                 if any(start.tzinfo is not None for start, _ in occupied):
@@ -402,7 +438,7 @@ def create_app(test_config=None):
     def close_slot(user, ident):
         with db() as c:
             c.execute('BEGIN IMMEDIATE')
-            slot = c.execute('SELECT * FROM slots WHERE id=? AND specialist_id=?', (ident, user['specialist_id'])).fetchone()
+            slot = c.execute('SELECT * FROM slots WHERE id=? AND specialist_id=? AND booking_mode="manual"', (ident, user['specialist_id'])).fetchone()
             if not slot:
                 return fail('Слот не найден', 404)
             if c.execute('SELECT id FROM bookings WHERE slot_id=? AND status="confirmed"', (ident,)).fetchone():
