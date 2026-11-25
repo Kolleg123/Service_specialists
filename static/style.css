@@ -124,3 +124,5 @@ body > .chat-launch { width: calc(100% - 48px); max-width: 1232px; margin: 20px 
  .action-reason { flex-basis: 100%; text-align: left; }
  .dashboard-update .button { margin-left: 0; }
 }
+
+.category-choice-list{border:1px solid var(--line);border-radius:9px;padding:14px;display:flex;flex-wrap:wrap;gap:10px 18px;grid-column:1/-1}.category-choice-list legend{padding:0 5px;color:var(--muted);font-size:12px}.category-choice-list label{display:flex;align-items:center;gap:7px;font-size:12px}.category-choice-list input{accent-color:var(--green)}
