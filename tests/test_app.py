@@ -242,12 +242,13 @@ def test_confirmation_snapshot_is_checked_atomically(app, field, value):
 
 def test_profile_edit_name_and_password(app):
     c = client(app)
-    result = post(c, '/profile', {
+    token = c.get('/api/session').json['csrf']
+    result = c.patch('/api/profile', json={
         'name': 'Новое Имя',
         'current_password': 'Demo2026!',
         'new_password': 'NewPassword123',
         'confirmation': 'NewPassword123',
-    })
+    }, headers={'X-CSRF-Token': token})
     assert result.status_code == 200
     assert result.json['user']['name'] == 'Новое Имя'
     assert post(c, '/logout', {}).status_code == 200
@@ -294,10 +295,11 @@ def test_account_deletion_requires_no_future_bookings_and_removes_client(app):
 
 def test_profile_rejects_wrong_current_password(app):
     c = client(app)
-    result = post(c, '/profile', {
+    token = c.get('/api/session').json['csrf']
+    result = c.patch('/api/profile', json={
         'name': 'Новое Имя',
         'current_password': 'wrong',
         'new_password': 'NewPassword123',
         'confirmation': 'NewPassword123',
-    })
+    }, headers={'X-CSRF-Token': token})
     assert result.status_code == 403
