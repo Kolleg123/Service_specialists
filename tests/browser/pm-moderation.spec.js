@@ -36,13 +36,15 @@ test('service applications are private until approval and decisions reach the ma
 
   await login(page, 'Администратор');
   await page.getByRole('button', { name: 'Заявки на услуги' }).click();
-  const rejection = page.locator('article').filter({ has: page.getByRole('heading', { name: rejected }) });
+  const rejection = page.locator('details[data-application-key]').filter({ hasText: rejected });
+  await rejection.locator('summary').click();
   await rejection.getByRole('button', { name: 'Отклонить' }).click();
   await expect(rejection.getByRole('alert')).toContainText('Укажите причину');
   await rejection.getByLabel('Причина отклонения').fill(reason);
   await rejection.getByRole('button', { name: 'Отклонить' }).click();
   await expect(rejection).toHaveCount(0);
-  const approval = page.locator('article').filter({ has: page.getByRole('heading', { name: approved }) });
+  const approval = page.locator('details[data-application-key]').filter({ hasText: approved });
+  await approval.locator('summary').click();
   await approval.getByRole('button', { name: 'Одобрить' }).click();
   await expect(approval).toHaveCount(0);
   await logout(page);
@@ -63,4 +65,37 @@ test('service applications are private until approval and decisions reach the ma
   const inbox = page.locator('#notifications-panel');
   await expect(inbox).toContainText(`Услуга «${approved}» одобрена`);
   await expect(inbox).toContainText(`Услуга «${rejected}» отклонена`);
+});
+
+test('open moderation and service tabs refresh without reloading', async ({ browser, page: admin }) => {
+  test.setTimeout(45000);
+  const master = await browser.newPage();
+  const title = 'Услуга с автообновлением';
+  try {
+    await admin.goto('/');
+    await login(admin, 'Администратор');
+    await admin.getByRole('button', { name: 'Заявки на услуги' }).click();
+    await expect(admin.locator('#service-application-filter')).toHaveValue('pending');
+
+    await master.goto('/');
+    await login(master, 'Мастер');
+    await master.getByRole('button', { name: 'Мои услуги' }).click();
+    const form = master.locator('#service-form');
+    await form.getByLabel('Название').fill(title);
+    await form.getByLabel('Стоимость').fill('900');
+    await form.getByRole('button', { name: 'Добавить услугу' }).click();
+    const service = master.locator('.service-row').filter({ hasText: title });
+    await expect(service).toContainText('На проверке');
+
+    const application = admin.locator('details[data-application-key]').filter({ hasText: title });
+    await expect(application).toBeVisible({ timeout: 15000 });
+    await application.locator('summary').click();
+    await application.getByRole('button', { name: 'Одобрить' }).click();
+    await expect(application).toHaveCount(0);
+    await admin.locator('#service-application-filter').selectOption('approved');
+    await expect(application).toContainText('Одобрена');
+    await expect(service).toContainText('Одобрена', { timeout: 15000 });
+  } finally {
+    await master.close();
+  }
 });

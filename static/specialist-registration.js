@@ -62,7 +62,7 @@ function renderSpecialistApplications(root, applications) {
    <option value="pending">На проверке</option><option value="approved">Одобренные</option>
    <option value="rejected">Отклонённые</option><option value="all">Все</option>
   </select></label>` + (filtered.length ? filtered.map(application => `
-  <details class="panel">
+  <details class="panel" data-application-key="specialist-${application.id}">
    <summary><strong>${esc(application.name)} · ${serviceStatus[application.status]}</strong>
     · ${esc(application.account_name)} · ${esc(application.email)}
     · ${date(application.created_at)} ${time(application.created_at)}</summary>

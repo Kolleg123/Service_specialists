@@ -347,10 +347,18 @@ def create_app(test_config=None):
                 JOIN specialists p ON p.id=s.specialist_id JOIN users u ON u.id=b.user_id WHERE {where} ORDER BY s.starts_at DESC''', params).fetchall()
             searches = c.execute('SELECT * FROM searches WHERE user_id=? ORDER BY id DESC LIMIT 30', (user['id'],)).fetchall()
             reviews = c.execute('SELECT r.*,p.name specialist,u.name author FROM reviews r JOIN specialists p ON p.id=r.specialist_id JOIN users u ON u.id=r.user_id ' + ('' if user['role'] == 'admin' else 'WHERE r.user_id=? ') + 'ORDER BY r.id DESC', () if user['role'] == 'admin' else (user['id'],)).fetchall()
+            pending = {}
+            if role == 'admin':
+                pending = {
+                    'service-applications': c.execute("""SELECT count(*) FROM services
+                        WHERE deleted=0 AND COALESCE(draft_status,moderation_status)='pending'""").fetchone()[0],
+                    'specialist-applications': c.execute("""SELECT count(*) FROM specialist_applications
+                        WHERE status='pending'""").fetchone()[0],
+                }
         current_time = now()
         reviewed_ids = {r['booking_id'] for r in reviews}
         rows = [{**dict(b), **booking_policy(b, user, current_time, b['id'] in reviewed_ids)} for b in bookings]
-        return jsonify(bookings=rows, searches=[dict(r) for r in searches], reviews=[dict(r) for r in reviews],
+        return jsonify(bookings=rows, pending=pending, searches=[dict(r) for r in searches], reviews=[dict(r) for r in reviews],
                        specialist_application=application, specialist_categories=CATEGORIES[1:] if client_view else [],
                        user={key: user[key] for key in ('id', 'name', 'email', 'role', 'specialist_id')},
                        server_now=current_time.isoformat(timespec='seconds'))
@@ -603,10 +611,15 @@ def create_app(test_config=None):
     @app.get('/api/admin/service-applications')
     @auth('admin')
     def service_applications(user):
+        status = request.args.get('status', 'pending')
+        if status not in ('pending', 'approved', 'rejected', 'all'):
+            return fail('Некорректный статус заявки')
         with db() as c:
-            applications = c.execute('''SELECT v.*,p.name specialist FROM services v
-                JOIN specialists p ON p.id=v.specialist_id WHERE v.deleted=0 AND (v.moderation_status='pending' OR v.draft_status='pending')
-                ORDER BY v.id''').fetchall()
+            applications = c.execute("""SELECT v.*,p.name specialist,
+                    COALESCE(v.draft_status,v.moderation_status) application_status
+                FROM services v JOIN specialists p ON p.id=v.specialist_id
+                WHERE v.deleted=0 AND (?='all' OR COALESCE(v.draft_status,v.moderation_status)=?)
+                ORDER BY v.id DESC""", (status, status)).fetchall()
         return jsonify(applications=[{**dict(row), **(service_details(row)['draft'] or {})}
                                      for row in applications])
 
