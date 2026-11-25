@@ -5,3 +5,8 @@ instance/
 node_modules/
 test-results/
 playwright-report/
+
+# Local environment variables and SMTP credentials
+.env
+.env.*
+!.env.example

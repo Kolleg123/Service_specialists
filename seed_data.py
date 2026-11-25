@@ -21,6 +21,11 @@ CREATE TABLE IF NOT EXISTS notifications(
 CREATE INDEX IF NOT EXISTS notification_inbox ON notifications(user_id,id DESC);
 CREATE TABLE IF NOT EXISTS reviews(id INTEGER PRIMARY KEY,user_id INTEGER REFERENCES users(id),specialist_id INTEGER REFERENCES specialists(id),booking_id INTEGER UNIQUE REFERENCES bookings(id),rating INTEGER CHECK(rating BETWEEN 1 AND 5),content TEXT,status TEXT,created_at TEXT);
 CREATE TABLE IF NOT EXISTS searches(id INTEGER PRIMARY KEY,user_id INTEGER REFERENCES users(id),query TEXT,created_at TEXT);
+CREATE TABLE IF NOT EXISTS password_reset_tokens(id INTEGER PRIMARY KEY,user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,token_hash TEXT NOT NULL UNIQUE,expires_at TEXT NOT NULL,created_at TEXT NOT NULL);
+CREATE INDEX IF NOT EXISTS password_reset_user ON password_reset_tokens(user_id);
+CREATE TABLE IF NOT EXISTS password_reset_requests(id INTEGER PRIMARY KEY,ip_address TEXT NOT NULL,email_hash TEXT NOT NULL,created_at TEXT NOT NULL);
+CREATE INDEX IF NOT EXISTS password_reset_rate_ip ON password_reset_requests(ip_address,created_at);
+CREATE INDEX IF NOT EXISTS password_reset_rate_email ON password_reset_requests(email_hash,created_at);
 CREATE INDEX IF NOT EXISTS booking_slot ON bookings(slot_id,status);
 CREATE INDEX IF NOT EXISTS slot_specialist ON slots(specialist_id,starts_at);
 

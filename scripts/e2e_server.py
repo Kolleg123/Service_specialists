@@ -13,7 +13,21 @@ clock_override = None
 app_module.now = lambda: clock_override if clock_override is not None else real_now()
 
 with tempfile.TemporaryDirectory(prefix='svobodno-e2e-') as folder:
-    app = app_module.create_app({'DATABASE': str(Path(folder) / 'test.sqlite'), 'TESTING': True})
+    mailbox = {}
+
+    def capture_email(config, email, name, url):
+        mailbox[email] = url
+
+    app = app_module.create_app({
+        'DATABASE': str(Path(folder) / 'test.sqlite'),
+        'TESTING': True,
+        'APP_BASE_URL': 'http://127.0.0.1:5051',
+        'MAIL_SENDER': capture_email,
+    })
+
+    @app.get('/__test__/recovery-mail')
+    def recovery_mail():
+        return jsonify(url=mailbox.get(request.args.get('email')))
 
     @app.post('/__test__/clock')
     def test_clock():
