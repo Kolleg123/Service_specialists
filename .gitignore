@@ -10,3 +10,6 @@ playwright-report/
 .env
 .env.*
 !.env.example
+
+# Uploaded specialist profile photos (runtime data)
+static/uploads/
