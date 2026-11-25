@@ -6,6 +6,9 @@ SCHEMA = """
 CREATE TABLE IF NOT EXISTS specialists(id INTEGER PRIMARY KEY,name TEXT,profession TEXT,category TEXT,experience INTEGER,education TEXT,skills TEXT,bio TEXT,photo TEXT,location TEXT,active INTEGER DEFAULT 1);
 CREATE TABLE IF NOT EXISTS users(id INTEGER PRIMARY KEY,name TEXT,email TEXT UNIQUE,password TEXT,role TEXT,specialist_id INTEGER REFERENCES specialists(id));
 CREATE TABLE IF NOT EXISTS services(id INTEGER PRIMARY KEY,specialist_id INTEGER REFERENCES specialists(id),title TEXT,price INTEGER,duration INTEGER,mode TEXT,active INTEGER DEFAULT 1);
+CREATE TABLE IF NOT EXISTS service_categories(id INTEGER PRIMARY KEY,name TEXT NOT NULL UNIQUE,active INTEGER NOT NULL DEFAULT 1);
+CREATE TABLE IF NOT EXISTS service_category_links(service_id INTEGER NOT NULL REFERENCES services(id) ON DELETE CASCADE,category_id INTEGER NOT NULL REFERENCES service_categories(id),PRIMARY KEY(service_id,category_id));
+CREATE INDEX IF NOT EXISTS service_category_lookup ON service_category_links(category_id,service_id);
 CREATE TABLE IF NOT EXISTS slots(id INTEGER PRIMARY KEY,specialist_id INTEGER REFERENCES specialists(id),service_id INTEGER REFERENCES services(id),starts_at TEXT,capacity INTEGER CHECK(capacity>0),active INTEGER DEFAULT 1);
 CREATE TABLE IF NOT EXISTS bookings(id INTEGER PRIMARY KEY,user_id INTEGER REFERENCES users(id),slot_id INTEGER REFERENCES slots(id),quantity INTEGER CHECK(quantity>0),address TEXT,note TEXT,status TEXT,created_at TEXT,total INTEGER);
 CREATE TABLE IF NOT EXISTS reviews(id INTEGER PRIMARY KEY,user_id INTEGER REFERENCES users(id),specialist_id INTEGER REFERENCES specialists(id),booking_id INTEGER UNIQUE REFERENCES bookings(id),rating INTEGER CHECK(rating BETWEEN 1 AND 5),content TEXT,status TEXT,created_at TEXT);
@@ -148,6 +151,15 @@ def initialize_database(connection, current_time):
         values = dict(specialist_id=specialist_ids[specialist], title=title, price=price, duration=duration, mode=mode)
         service_ids[index] = ensure(connection, f'service:{index}', 'services',
                                     {'specialist_id': values['specialist_id'], 'title': title}, values, index)
+
+    # Shared category dictionary used by specialist services and the public catalog.
+    category_names = ['Дом и ремонт', 'Красота', 'Обучение', 'Здоровье', 'Мероприятия']
+    connection.executemany('INSERT OR IGNORE INTO service_categories(name) VALUES(?)', [(name,) for name in category_names])
+    # Existing services inherit their specialist's category during the migration.
+    connection.execute('''INSERT OR IGNORE INTO service_category_links(service_id,category_id)
+        SELECT v.id,sc.id FROM services v JOIN specialists p ON p.id=v.specialist_id
+        JOIN service_categories sc ON sc.name=p.category
+        WHERE NOT EXISTS(SELECT 1 FROM service_category_links x WHERE x.service_id=v.id)''')
 
     anchor_row = connection.execute("SELECT value FROM seed_meta WHERE name='anchor_date'").fetchone()
     if anchor_row:
