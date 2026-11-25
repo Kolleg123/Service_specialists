@@ -14,9 +14,10 @@ from flask import Flask, jsonify, request, session, send_from_directory
 from werkzeug.security import generate_password_hash, check_password_hash
 from booking_schedule import save_schedule, schedule_for
 from booking_service import BookingError, available_slots, create_booking
-from booking_lifecycle import booking_interval, booking_policy, transition_booking
+from booking_lifecycle import CUSTOMER_ROLES, booking_interval, booking_policy, transition_booking
 from password_recovery import send_recovery_email
 from service_moderation import ModerationError, PUBLIC_SERVICE, decide_service
+from specialist_registration import decide_application, latest_application, submit_application
 
 load_dotenv()
 
@@ -64,7 +65,7 @@ def create_app(test_config=None):
     def fail(message, status=400):
         return jsonify(error=message), status
 
-    def auth(role=None):
+    def auth(*roles):
         def deco(fn):
             @wraps(fn)
             def wrapped(*args, **kwargs):
@@ -72,7 +73,7 @@ def create_app(test_config=None):
                     user = c.execute('SELECT * FROM users WHERE id=?', (session.get('uid'),)).fetchone()
                 if not user:
                     return fail('Войдите в личный кабинет', 401)
-                if role and user['role'] != role:
+                if roles and user['role'] not in roles:
                     return fail('Недостаточно прав', 403)
                 return fn(user, *args, **kwargs)
             return wrapped
@@ -256,7 +257,7 @@ def create_app(test_config=None):
         return jsonify(slots=rows)
 
     @app.post('/api/bookings')
-    @auth('client')
+    @auth(*CUSTOMER_ROLES)
     def book(user):
         try:
             with db() as c:
@@ -270,7 +271,7 @@ def create_app(test_config=None):
     def notifications(user):
         with db() as c:
             rows = c.execute(
-                'SELECT id,booking_id,service_id,event,message,created_at,is_read FROM notifications WHERE user_id=? ORDER BY id DESC',
+                'SELECT id,booking_id,service_id,specialist_application_id,event,message,created_at,is_read FROM notifications WHERE user_id=? ORDER BY id DESC',
                 (user['id'],)).fetchall()
         return jsonify(notifications=[{**dict(row), 'is_read': bool(row['is_read'])} for row in rows])
 
@@ -289,8 +290,18 @@ def create_app(test_config=None):
     @app.get('/api/dashboard')
     @auth()
     def dashboard(user):
-        where, params = ('b.user_id=?', (user['id'],)) if user['role'] == 'client' else ('s.specialist_id=?', (user['specialist_id'],)) if user['role'] == 'master' else ('1=1', ())
+        role = user['role']
+        client_view = role == 'client' or (role == 'master' and request.args.get('mode') == 'client')
+        if client_view:
+            where, params = 'b.user_id=?', (user['id'],)
+        elif role == 'master':
+            where, params = 's.specialist_id=?', (user['specialist_id'],)
+        elif role == 'admin':
+            where, params = '1=1', ()
+        else:
+            return fail('Недостаточно прав', 403)
         with db() as c:
+            application = latest_application(c, user['id']) if client_view else None
             bookings = c.execute(f'''SELECT b.*,s.starts_at,s.ends_at slot_ends_at,s.booking_mode,s.specialist_id,s.capacity,v.title service,v.mode,
                 CASE WHEN s.booking_mode='time' THEN ROUND((julianday(s.ends_at)-julianday(s.starts_at))*1440) ELSE v.duration END duration,p.name specialist,p.photo,u.name client
                 FROM bookings b JOIN slots s ON s.id=b.slot_id JOIN services v ON v.id=s.service_id
@@ -301,6 +312,8 @@ def create_app(test_config=None):
         reviewed_ids = {r['booking_id'] for r in reviews}
         rows = [{**dict(b), **booking_policy(b, user, current_time, b['id'] in reviewed_ids)} for b in bookings]
         return jsonify(bookings=rows, searches=[dict(r) for r in searches], reviews=[dict(r) for r in reviews],
+                       specialist_application=application, specialist_categories=CATEGORIES[1:] if client_view else [],
+                       user={key: user[key] for key in ('id', 'name', 'email', 'role', 'specialist_id')},
                        server_now=current_time.isoformat(timespec='seconds'))
 
     def apply_booking_transition(user, ident, action):
@@ -322,7 +335,7 @@ def create_app(test_config=None):
         return apply_booking_transition(user, ident, 'complete')
 
     @app.post('/api/reviews')
-    @auth('client')
+    @auth(*CUSTOMER_ROLES)
     def review(user):
         d = request.get_json()
         rating, content = d.get('rating'), str(d.get('content', '')).strip()
@@ -342,7 +355,7 @@ def create_app(test_config=None):
         return jsonify(ok=True), 201
 
     @app.post('/api/searches')
-    @auth('client')
+    @auth(*CUSTOMER_ROLES)
     def search_history(user):
         query = str(request.get_json().get('query', '')).strip()[:150]
         if query:
@@ -470,6 +483,36 @@ def create_app(test_config=None):
         with db() as c:
             return jsonify(specialists=[dict(r) for r in c.execute('SELECT * FROM specialists')],
                            services=[dict(r) for r in c.execute('SELECT v.*,p.name specialist FROM services v JOIN specialists p ON p.id=v.specialist_id')])
+
+    @app.post('/api/specialist-applications')
+    @auth('client')
+    def apply_for_specialist(user):
+        try:
+            with db() as c:
+                application = submit_application(c, user['id'], request.get_json(), CATEGORIES[1:], now)
+        except ModerationError as error:
+            return fail(str(error), error.status)
+        return jsonify(application=application), 201
+
+    @app.get('/api/admin/specialist-applications')
+    @auth('admin')
+    def specialist_applications(user):
+        with db() as c:
+            rows = c.execute("""SELECT a.*,u.name account_name,u.email FROM specialist_applications a
+                JOIN users u ON u.id=a.user_id ORDER BY (a.status='pending') DESC,a.id DESC""").fetchall()
+        return jsonify(applications=[dict(row) for row in rows])
+
+    @app.post('/api/admin/specialist-applications/<int:ident>/decision')
+    @auth('admin')
+    def specialist_decision(user, ident):
+        if not 1 <= ident < 2**63:
+            return fail('Заявка не найдена', 404)
+        try:
+            with db() as c:
+                decide_application(c, ident, request.get_json(), now)
+        except ModerationError as error:
+            return fail(str(error), error.status)
+        return jsonify(ok=True)
 
     @app.get('/api/admin/service-applications')
     @auth('admin')

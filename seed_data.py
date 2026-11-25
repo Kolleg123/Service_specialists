@@ -28,6 +28,26 @@ CREATE INDEX IF NOT EXISTS password_reset_rate_email ON password_reset_requests(
 CREATE INDEX IF NOT EXISTS booking_slot ON bookings(slot_id,status);
 CREATE INDEX IF NOT EXISTS slot_specialist ON slots(specialist_id,starts_at);
 
+CREATE TABLE IF NOT EXISTS specialist_applications(
+    id INTEGER PRIMARY KEY,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    profession TEXT NOT NULL,
+    category TEXT NOT NULL,
+    experience INTEGER NOT NULL CHECK(experience BETWEEN 0 AND 80),
+    education TEXT NOT NULL,
+    skills TEXT NOT NULL,
+    bio TEXT NOT NULL,
+    location TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','approved','rejected')),
+    reason TEXT,
+    created_at TEXT NOT NULL,
+    decided_at TEXT
+);
+CREATE UNIQUE INDEX IF NOT EXISTS one_pending_specialist_application
+    ON specialist_applications(user_id) WHERE status='pending';
+CREATE INDEX IF NOT EXISTS specialist_application_history ON specialist_applications(user_id,id DESC);
+
 CREATE TABLE IF NOT EXISTS seed_meta(name TEXT PRIMARY KEY,value TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS seed_entities(seed_key TEXT PRIMARY KEY,table_name TEXT NOT NULL,entity_id INTEGER NOT NULL);
 """
@@ -38,17 +58,24 @@ CREATE TABLE notifications(
     user_id INTEGER NOT NULL REFERENCES users(id),
     booking_id INTEGER REFERENCES bookings(id) ON DELETE CASCADE,
     service_id INTEGER REFERENCES services(id) ON DELETE CASCADE,
+    specialist_application_id INTEGER REFERENCES specialist_applications(id) ON DELETE CASCADE,
     event TEXT NOT NULL,
     message TEXT NOT NULL,
     created_at TEXT NOT NULL,
     is_read INTEGER NOT NULL DEFAULT 0 CHECK(is_read IN (0,1)),
     CHECK(
-        (booking_id IS NOT NULL AND service_id IS NULL AND event IN ('confirmed','cancelled','completed'))
+        (booking_id IS NOT NULL AND service_id IS NULL AND specialist_application_id IS NULL
+            AND event IN ('confirmed','cancelled','completed'))
         OR
-        (booking_id IS NULL AND service_id IS NOT NULL AND event IN ('service_approved','service_rejected'))
+        (booking_id IS NULL AND service_id IS NOT NULL AND specialist_application_id IS NULL
+            AND event IN ('service_approved','service_rejected'))
+        OR
+        (booking_id IS NULL AND service_id IS NULL AND specialist_application_id IS NOT NULL
+            AND event IN ('specialist_approved','specialist_rejected'))
     ),
     UNIQUE(user_id,booking_id,event),
-    UNIQUE(user_id,service_id)
+    UNIQUE(user_id,service_id),
+    UNIQUE(user_id,specialist_application_id)
 )
 """
 
@@ -61,12 +88,16 @@ def migrate_service_moderation(connection):
     if 'moderation_reason' not in columns:
         connection.execute('ALTER TABLE services ADD COLUMN moderation_reason TEXT')
 
+
+def migrate_notifications(connection):
     columns = {row['name'] for row in connection.execute('PRAGMA table_info(notifications)')}
-    if columns and 'service_id' not in columns:
+    if columns and 'specialist_application_id' not in columns:
         connection.execute('ALTER TABLE notifications RENAME TO previous_notifications')
         connection.execute(NOTIFICATIONS_TABLE)
-        connection.execute("""INSERT INTO notifications(id,user_id,booking_id,event,message,created_at,is_read)
-            SELECT id,user_id,booking_id,event,message,created_at,is_read FROM previous_notifications""")
+        fields = 'id,user_id,booking_id,event,message,created_at,is_read'
+        if 'service_id' in columns:
+            fields += ',service_id'
+        connection.execute(f"INSERT INTO notifications({fields}) SELECT {fields} FROM previous_notifications")
         connection.execute('DROP TABLE previous_notifications')
     elif not columns:
         connection.execute(NOTIFICATIONS_TABLE)
@@ -182,6 +213,7 @@ def initialize_database(connection, current_time):
     if 'ends_at' not in slot_columns:
         connection.execute('ALTER TABLE slots ADD COLUMN ends_at TEXT')
     migrate_service_moderation(connection)
+    migrate_notifications(connection)
     specialist_ids = {}
     for index, person in enumerate(PEOPLE, 1):
         keys = ['name','profession','category','experience','education','skills','bio']

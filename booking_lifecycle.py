@@ -5,6 +5,9 @@ from booking_notifications import notify_booking
 from booking_service import BookingError, parse_start
 
 
+CUSTOMER_ROLES = ('client', 'master')
+
+
 def booking_interval(booking):
     start = parse_start(booking['starts_at'])
     return start, (parse_start(booking['slot_ends_at']) if booking['slot_ends_at']
@@ -20,7 +23,7 @@ def booking_policy(booking, user, current_time, has_review=False):
         phase = status
     labels = {'upcoming': 'Предстоит', 'in_progress': 'Идёт встреча',
               'awaiting_completion': 'Ожидает завершения', 'completed': 'Завершена', 'cancelled': 'Отменена'}
-    owner = user['role'] == 'client' and booking['user_id'] == user['id']
+    owner = user['role'] in CUSTOMER_ROLES and booking['user_id'] == user['id']
     assigned = user['role'] == 'master' and booking['specialist_id'] == user['specialist_id']
     can_manage = owner or assigned or user['role'] == 'admin'
     can_cancel = can_manage and status == 'confirmed' and current_time < start
@@ -56,7 +59,7 @@ def transition_booking(connection, user, booking_id, action, clock):
         if booking['specialist_id'] != user['specialist_id']:
             raise BookingError('Запись не найдена', 404)
     elif action == 'cancel':
-        if not (user['role'] == 'admin' or user['role'] == 'client' and booking['user_id'] == user['id']
+        if not (user['role'] == 'admin' or user['role'] in CUSTOMER_ROLES and booking['user_id'] == user['id']
                 or user['role'] == 'master' and booking['specialist_id'] == user['specialist_id']):
             raise BookingError('Недостаточно прав', 403)
     else:

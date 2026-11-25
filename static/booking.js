@@ -82,6 +82,7 @@ class BookingFlow {
   }
 
   get alive() { return activeBooking === this && Boolean($('#booking-flow')); }
+  get ownProfile() { return state.user?.specialist_id === this.specialist.id; }
   get service() { return this.specialist.services.find(s => s.id === this.serviceId); }
   get dateOnly() { return (this.slots[0]?.booking_mode ?? this.specialist.booking_mode) === 'day'; }
   slotKey(slot) { return slot.id ?? slot.starts_at; }
@@ -100,9 +101,10 @@ class BookingFlow {
     $('#booking-service').onchange = e => {
       this.serviceId = Number(e.target.value);
       this.resetChoice('Услуга изменена. Прежние дата и время сброшены — выберите новый слот.');
-      this.step = 2;
+      this.step = this.ownProfile ? 1 : 2;
       this.fields.quantity = 1;
-      this.refresh();
+      if (this.ownProfile) this.render();
+      else this.refresh();
     };
     this.render();
     $('#booking-service').focus();
@@ -142,7 +144,7 @@ class BookingFlow {
     $('#booking-flow').dataset.step = this.step;
     $('#booking-service').disabled = this.submitting || !this.service;
     $('.booking-steps').innerHTML = ['Услуга', this.dateOnly ? 'Дата' : 'Дата и время', 'Подтверждение'].map((label, i) =>
-      `<button type="button" data-step="${i + 1}" ${this.submitting || (i === 2 && !this.slot) || (i > 0 && !this.service) ? 'disabled' : ''} ${this.step === i + 1 ? 'aria-current="step"' : ''}><span>${i + 1}</span>${label}</button>`).join('');
+      `<button type="button" data-step="${i + 1}" ${this.submitting || (i === 2 && !this.slot) || (i > 0 && (!this.service || this.ownProfile)) ? 'disabled' : ''} ${this.step === i + 1 ? 'aria-current="step"' : ''}><span>${i + 1}</span>${label}</button>`).join('');
     $$('.booking-steps [data-step]').forEach(b => b.onclick = () => {
       this.step = Number(b.dataset.step);
       if (this.step === 2) this.refresh('Проверьте актуальное расписание и выберите время.');
@@ -155,7 +157,7 @@ class BookingFlow {
       content.innerHTML = `<h3 tabindex="-1">1. Выберите услугу</h3><p class="bio">${esc(s.bio)}</p>
         <details class="education"><summary>Опыт, образование и навыки</summary><p>${esc(s.education)}</p><div class="tags">${s.skills.split(',').map(x => `<span>${esc(x)}</span>`).join('')}</div></details>
         <details class="profile-reviews"><summary>${reviewCount(s.reviews.length)}</summary>${s.reviews.length ? s.reviews.map(r => `<article class="review"><div><strong>${esc(r.name)}</strong><span class="stars">${'★'.repeat(r.rating)}</span></div><p>${esc(r.content)}</p><small>${date(r.created_at)} · Подтверждённая встреча</small></article>`).join('') : '<p class="muted">Пока нет опубликованных отзывов.</p>'}</details>
-        ${this.service ? `<div class="service-summary"><strong>${esc(this.service.title)}</strong><span>${this.service.duration} мин · ${this.service.mode}</span><b>${money(this.service.price)}</b></div><button id="choose-date" class="button full">Выбрать ${this.dateOnly ? 'дату' : 'дату и время'} →</button>` : '<div class="empty compact">У специалиста пока нет доступных услуг.</div>'}`;
+        ${this.service ? `<div class="service-summary"><strong>${esc(this.service.title)}</strong><span>${this.service.duration} мин · ${this.service.mode}</span><b>${money(this.service.price)}</b></div>${this.ownProfile ? '<p>Записаться на собственную услугу нельзя.</p>' : `<button id="choose-date" class="button full">Выбрать ${this.dateOnly ? 'дату' : 'дату и время'} →</button>`}` : '<div class="empty compact">У специалиста пока нет доступных услуг.</div>'}`;
       if ($('#choose-date')) $('#choose-date').onclick = () => { this.step = 2; this.refresh(); };
     } else if (this.step === 2) {
       this.renderTimes(content);
@@ -229,6 +231,7 @@ class BookingFlow {
 
   renderConfirmation(content) {
     const s = this.slot;
+    const bookingBlocked = this.ownProfile || state.user?.role === 'admin';
     if (!s) { this.step = 2; this.render(); return; }
     content.innerHTML = `<h3 id="confirmation-title" tabindex="-1">3. Проверьте запись</h3>
       <dl class="confirmation-summary"><div><dt>Специалист</dt><dd>${esc(this.specialist.name)}</dd></div><div><dt>Услуга</dt><dd>${esc(s.service)}</dd></div><div><dt>${this.dateOnly ? 'Дата' : 'Дата и время · UTC+3'}</dt><dd>${date(s.starts_at)}${this.dateOnly ? '' : ' · ' + time(s.starts_at)}</dd></div><div><dt>Продолжительность</dt><dd>${s.duration} мин</dd></div><div><dt>Формат</dt><dd>${esc(s.mode)}</dd></div><div><dt>Цена за участника</dt><dd>${money(s.price)}</dd></div></dl>
@@ -237,8 +240,8 @@ class BookingFlow {
       ${s.mode === 'Выезд' ? `<label class="field">Адрес выезда<input name="address" value="${esc(this.fields.address)}" placeholder="Улица, дом, квартира" minlength="5" maxlength="250" required></label>` : ''}
       <label class="field">Комментарий (необязательно)<textarea name="note" maxlength="1000" placeholder="Что важно знать специалисту?">${esc(this.fields.note)}</textarea></label>
       <p class="form-error" role="alert"></p>
-      <div class="booking-total"><span>Итого <strong id="total-price">${money(s.price * this.fields.quantity)}</strong></span><button id="confirm-booking" class="button" ${state.user && state.user.role !== 'client' ? 'disabled' : ''}>${state.user ? 'Подтвердить запись' : 'Войти и записаться'} →</button></div>
-      <p class="muted">${state.user && state.user.role !== 'client' ? 'Для записи войдите как клиент.' : 'Перед подтверждением мы ещё раз проверим свободные места.'}</p></form>`;
+      <div class="booking-total"><span>Итого <strong id="total-price">${money(s.price * this.fields.quantity)}</strong></span><button id="confirm-booking" class="button" ${bookingBlocked ? 'disabled' : ''}>${state.user ? 'Подтвердить запись' : 'Войти и записаться'} →</button></div>
+      <p class="muted">${this.ownProfile ? 'Записаться на собственную услугу нельзя.' : bookingBlocked ? 'Для записи войдите как клиент.' : 'Перед подтверждением мы ещё раз проверим свободные места.'}</p></form>`;
     const form = $('#book-form');
     form.oninput = () => {
       this.fields = {address: form.elements.address?.value || '', note: form.elements.note.value, quantity: Number(form.elements.quantity.value)};
@@ -279,6 +282,9 @@ class BookingFlow {
         duration: snapshot.duration, price: snapshot.price, ...this.fields});
       closeModal();
       toast('Вы записаны! Подробности — в личном кабинете.');
+      dashboardMode = 'client';
+      dashboardTab = 'bookings';
+      dashboardStatusFilter = 'all';
       if (location.hash === '#dashboard') await dashboard();
       else location.hash = 'dashboard';
     } catch (error) {

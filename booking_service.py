@@ -196,6 +196,9 @@ def create_booking(connection, user_id, data, clock):
             (user_id, service_id, slot['date'])).fetchone():
             raise BookingError('Вы уже записаны на эту услугу на выбранную дату', 409)
 
+    if connection.execute('SELECT 1 FROM users WHERE id=? AND specialist_id=?',
+                          (user_id, slot['specialist_id'])).fetchone():
+        raise BookingError('Записаться на собственную услугу нельзя', 403)
     for key in ('starts_at', 'ends_at', 'duration', 'price'):
         if key in data and data[key] != slot[key]:
             raise BookingError('Условия записи изменились. Проверьте дату, время и цену заново.', 409)

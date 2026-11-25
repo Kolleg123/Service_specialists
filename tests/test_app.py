@@ -68,7 +68,7 @@ def test_roles_csrf_and_other_clients(app):
     c, other, master = client(app), client(app, 'ivan'), client(app, 'master')
     assert c.get('/api/admin').status_code == 403
     assert c.get('/api/master').status_code == 403
-    assert post(master, '/bookings', {}).status_code == 403
+    assert post(master, '/bookings', {}).status_code == 400
     slot = c.get('/api/slots/1').json['slots'][0]
     b = post(c, '/bookings', {'slot_id': slot['id'], 'address': 'Киров, Ленина 10'}).json
     assert post(other, f"/bookings/{b['id']}/cancel", {}).status_code == 403
