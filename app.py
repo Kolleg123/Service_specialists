@@ -62,6 +62,22 @@ def create_app(test_config=None):
     def fail(message, status=400):
         return jsonify(error=message), status
 
+    def normalize_service_categories(connection, values):
+        if not isinstance(values, list) or not 1 <= len(values) <= 3:
+            raise ValueError('Выберите от 1 до 3 категорий услуги')
+        names = [value.strip() for value in values if isinstance(value, str)]
+        if len(names) != len(values) or len(set(names)) != len(names):
+            raise ValueError('Категории должны быть уникальными')
+        allowed = {row['name'] for row in connection.execute('SELECT name FROM service_categories WHERE active=1')}
+        if any(name not in allowed for name in names):
+            raise ValueError('Выбрана неизвестная или неактивная категория')
+        return names
+
+    def set_service_categories(connection, service_id, names):
+        connection.execute('DELETE FROM service_category_links WHERE service_id=?', (service_id,))
+        connection.executemany('INSERT INTO service_category_links(service_id,category_id) SELECT ?,id FROM service_categories WHERE name=?',
+                               [(service_id, name) for name in names])
+
     def auth(role=None):
         def deco(fn):
             @wraps(fn)
@@ -205,6 +221,9 @@ def create_app(test_config=None):
             for row in c.execute('SELECT * FROM specialists WHERE active=1 ORDER BY id'):
                 s = dict(row)
                 s['services'] = [dict(r) for r in c.execute('SELECT * FROM services WHERE specialist_id=? AND active=1', (s['id'],))]
+                for service in s['services']:
+                    service['categories'] = [r['name'] for r in c.execute('''SELECT sc.name FROM service_categories sc
+                        JOIN service_category_links scl ON scl.category_id=sc.id WHERE scl.service_id=? AND sc.active=1 ORDER BY sc.id''', (service['id'],))]
                 s['reviews'] = [dict(r) for r in c.execute('SELECT r.*,u.name FROM reviews r JOIN users u ON r.user_id=u.id WHERE r.specialist_id=? AND r.status="approved" ORDER BY r.id DESC', (s['id'],))]
                 s['rating'] = round(sum(r['rating'] for r in s['reviews']) / len(s['reviews']), 1) if s['reviews'] else None
                 s['next_slot'] = c.execute('SELECT MIN(starts_at) FROM slots WHERE specialist_id=? AND starts_at>? AND active=1', (s['id'], now().isoformat(timespec='minutes'))).fetchone()[0]
@@ -324,22 +343,51 @@ def create_app(test_config=None):
     @auth('master')
     def master(user):
         with db() as c:
-            services = c.execute('SELECT * FROM services WHERE specialist_id=?', (user['specialist_id'],)).fetchall()
+            services = [dict(r) for r in c.execute('SELECT * FROM services WHERE specialist_id=? ORDER BY id', (user['specialist_id'],))]
+            for service in services:
+                service['categories'] = [r['name'] for r in c.execute('''SELECT sc.name FROM service_categories sc
+                    JOIN service_category_links scl ON scl.category_id=sc.id WHERE scl.service_id=? AND sc.active=1 ORDER BY sc.id''', (service['id'],))]
+            categories = [dict(r) for r in c.execute('SELECT id,name FROM service_categories WHERE active=1 ORDER BY id')]
             slots = c.execute('''SELECT s.*,v.title service,COALESCE((SELECT SUM(quantity) FROM bookings WHERE slot_id=s.id AND status='confirmed'),0) booked
                 FROM slots s JOIN services v ON v.id=s.service_id WHERE s.specialist_id=? AND s.starts_at>? ORDER BY s.starts_at''', (user['specialist_id'], now().isoformat(timespec='minutes'))).fetchall()
-        return jsonify(services=[dict(r) for r in services], slots=[dict(r) for r in slots])
+        return jsonify(services=services, categories=categories, slots=[dict(r) for r in slots])
 
     @app.post('/api/master/services')
     @auth('master')
     def add_service(user):
         d = request.get_json()
         title, mode = str(d.get('title', '')).strip(), d.get('mode')
+        price, duration, categories = d.get('price'), d.get('duration'), d.get('categories')
+        if not 3 <= len(title) <= 100 or mode not in ['Выезд', 'У специалиста', 'Онлайн', 'Группа'] or type(price) is not int or not 0 <= price <= 1000000 or type(duration) is not int or not 15 <= duration <= 480:
+            return fail('Проверьте название, формат, стоимость и длительность (15–480 минут)')
+        with db() as c:
+            try:
+                categories = normalize_service_categories(c, categories)
+            except ValueError as error:
+                return fail(str(error))
+            service_id = c.execute('INSERT INTO services(specialist_id,title,price,duration,mode) VALUES(?,?,?,?,?)', (user['specialist_id'], title, price, duration, mode)).lastrowid
+            set_service_categories(c, service_id, categories)
+        return jsonify(ok=True, id=service_id), 201
+
+    @app.patch('/api/master/services/<int:ident>')
+    @auth('master')
+    def edit_service(user, ident):
+        d = request.get_json()
+        title, mode = str(d.get('title', '')).strip(), d.get('mode')
         price, duration = d.get('price'), d.get('duration')
         if not 3 <= len(title) <= 100 or mode not in ['Выезд', 'У специалиста', 'Онлайн', 'Группа'] or type(price) is not int or not 0 <= price <= 1000000 or type(duration) is not int or not 15 <= duration <= 480:
             return fail('Проверьте название, формат, стоимость и длительность (15–480 минут)')
         with db() as c:
-            c.execute('INSERT INTO services(specialist_id,title,price,duration,mode) VALUES(?,?,?,?,?)', (user['specialist_id'], title, price, duration, mode))
-        return jsonify(ok=True), 201
+            service = c.execute('SELECT id FROM services WHERE id=? AND specialist_id=?', (ident, user['specialist_id'])).fetchone()
+            if not service:
+                return fail('Услуга не найдена', 404)
+            try:
+                categories = normalize_service_categories(c, d.get('categories'))
+            except ValueError as error:
+                return fail(str(error))
+            c.execute('UPDATE services SET title=?,price=?,duration=?,mode=? WHERE id=?', (title, price, duration, mode, ident))
+            set_service_categories(c, ident, categories)
+        return jsonify(ok=True)
 
     @app.post('/api/master/slots')
     @auth('master')
