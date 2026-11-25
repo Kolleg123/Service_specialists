@@ -90,7 +90,7 @@ def test_schedule_and_service_creation(app):
     d['starts_at'] = when
     d['capacity'] = 2
     assert post(c, '/master/slots', d).status_code == 400
-    assert post(c, '/master/services', {'title': 'Семинар о сантехнике', 'price': 500, 'duration': 60, 'mode': 'Группа'}).status_code == 201
+    assert post(c, '/master/services', {'title': 'Семинар о сантехнике', 'price': 500, 'duration': 60, 'mode': 'Группа', 'categories': ['Дом и ремонт']}).status_code == 201
     service = c.get('/api/master').json['services'][-1]
     d.update(service_id=service['id'], starts_at=(now()+timedelta(days=21)).isoformat(timespec='minutes'), capacity=10)
     assert post(c, '/master/slots', d).status_code == 201
@@ -237,3 +237,29 @@ def test_confirmation_snapshot_is_checked_atomically(app, field, value):
     slot = c.get('/api/slots/1').json['slots'][0]
     r = post(c, '/bookings', {'slot_id': slot['id'], 'address': 'Киров, Ленина 10', field: value})
     assert r.status_code == 409 and 'Условия записи изменились' in r.json['error']
+
+
+def test_service_categories_create_edit_and_catalog_filter(app):
+    master = client(app, 'master')
+    data = master.get('/api/master').json
+    assert [row['name'] for row in data['categories']] == ['Дом и ремонт', 'Красота', 'Обучение', 'Здоровье', 'Мероприятия']
+    payload = {'title': 'Тестовая услуга', 'price': 900, 'duration': 60, 'mode': 'Онлайн', 'categories': ['Красота']}
+    created = post(master, '/master/services', payload)
+    assert created.status_code == 201
+    service_id = created.json['id']
+    catalog = master.get('/api/catalog').json['specialists']
+    specialist = next(row for row in catalog if row['id'] == 1)
+    service = next(row for row in specialist['services'] if row['id'] == service_id)
+    assert service['categories'] == ['Красота']
+    assert post(master, '/master/services', {**payload, 'categories': ['Несуществующая']}).status_code == 400
+    updated = {**payload, 'title': 'Обновлённая услуга', 'categories': ['Обучение', 'Мероприятия']}
+    token = master.get('/api/session').json['csrf']
+    response = master.patch('/api/master/services/' + str(service_id), json=updated, headers={'X-CSRF-Token': token})
+    assert response.status_code == 200
+    catalog = master.get('/api/catalog').json['specialists']
+    specialist = next(row for row in catalog if row['id'] == 1)
+    service = next(row for row in specialist['services'] if row['id'] == service_id)
+    assert service['categories'] == ['Обучение', 'Мероприятия']
+    assert service['title'] == 'Обновлённая услуга'
+    # A specialist cannot edit another specialist's service.
+    assert master.patch('/api/master/services/5', json=updated, headers={'X-CSRF-Token': token}).status_code == 404
