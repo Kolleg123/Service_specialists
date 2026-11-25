@@ -87,6 +87,8 @@ def create_app(test_config=None):
                 if not request.content_type or not request.content_type.startswith('multipart/form-data'):
                     return fail('Ожидается файл изображения', 415)
                 return None
+            if request.method == 'DELETE':
+                return None
             if not request.is_json:
                 return fail('Ожидается JSON', 415)
             if not isinstance(request.get_json(), dict):
