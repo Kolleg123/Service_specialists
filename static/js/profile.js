@@ -16,10 +16,16 @@ function renderAccountProfile(root, user) {
    </div></section>
    <section><h3>Личные данные</h3><form id="profile-form">
      <label class="field">ФИО<input name="name" value="${esc(user.name)}" minlength="2" maxlength="80" required></label>
+     <label class="field">Логин (электронная почта)<input type="email" value="${esc(user.email)}" readonly></label>
      <h3 class="settings-subtitle">Смена пароля</h3>
-     <label class="field">Текущий пароль<input name="current_password" type="password" autocomplete="current-password"></label>
-     <label class="field">Новый пароль<input name="new_password" type="password" minlength="8" maxlength="128" autocomplete="new-password"></label>
-     <label class="field">Повторите новый пароль<input name="confirmation" type="password" minlength="8" maxlength="128" autocomplete="new-password"></label>
+     <label class="field">Текущий пароль<input id="profile-current-password" name="current_password" type="password" autocomplete="current-password"></label>
+     <label class="field">Новый пароль<input id="profile-new-password" name="new_password" type="password" minlength="8" maxlength="128" autocomplete="new-password"></label>
+     <label class="field">Повторите новый пароль<input id="profile-confirmation" name="confirmation" type="password" minlength="8" maxlength="128" autocomplete="new-password"></label>
+     <div class="profile-password-actions">
+      <button id="toggle-profile-passwords" class="text-button" type="button"
+       aria-controls="profile-current-password profile-new-password profile-confirmation">Показать пароли</button>
+      <button id="profile-forgot-password" class="text-button" type="button">Забыли пароль?</button>
+     </div>
      <p class="form-error" role="alert"></p>
      <button class="button" type="submit">Сохранить изменения</button>
    </form></section>
@@ -60,6 +66,18 @@ function renderAccountProfile(root, user) {
  };
 
  const details = $('#profile-form', root);
+ const passwords = $$('input[type="password"]', details);
+ const togglePasswords = $('#toggle-profile-passwords', details);
+ togglePasswords.onclick = () => {
+  const show = passwords[0].type === 'password';
+  passwords.forEach(input => {input.type = show ? 'text' : 'password';});
+  togglePasswords.textContent = show ? 'Скрыть пароли' : 'Показать пароли';
+ };
+ $('#profile-forgot-password', details).onclick = () => requestPasswordReset({
+  email: user.email,
+  onBack: closeModal,
+  backLabel: 'Вернуться в профиль'
+ });
  details.onsubmit = event => {
   event.preventDefault();
   return saveAccountProfile(details, '/profile', Object.fromEntries(new FormData(details)), 'PATCH', 'Профиль сохранён');
