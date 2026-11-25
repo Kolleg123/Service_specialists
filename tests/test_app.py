@@ -243,6 +243,7 @@ def test_service_categories_create_edit_and_catalog_filter(app):
     master = client(app, 'master')
     data = master.get('/api/master').json
     assert [row['name'] for row in data['categories']] == ['Дом и ремонт', 'Красота', 'Обучение', 'Здоровье', 'Мероприятия']
+    assert master.get('/api/catalog').json['categories'] == ['Все специалисты', *[row['name'] for row in data['categories']]]
     payload = {'title': 'Тестовая услуга', 'price': 900, 'duration': 60, 'mode': 'Онлайн', 'categories': ['Красота']}
     created = post(master, '/master/services', payload)
     assert created.status_code == 201
