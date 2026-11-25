@@ -12,6 +12,7 @@ from zoneinfo import ZoneInfo
 from dotenv import load_dotenv
 from flask import Flask, jsonify, request, session, send_from_directory
 from werkzeug.security import generate_password_hash, check_password_hash
+from werkzeug.utils import secure_filename
 from booking_service import BookingError, available_slots, create_booking
 from booking_lifecycle import booking_interval, booking_policy, transition_booking
 from password_recovery import send_recovery_email
@@ -28,7 +29,7 @@ def now():
 
 def create_app(test_config=None):
     app = Flask(__name__, static_folder='static')
-    app.config.update(DATABASE=os.path.join(app.instance_path, 'svobodno.sqlite'), SESSION_COOKIE_HTTPONLY=True,
+    app.config.update(DATABASE=os.path.join(app.instance_path, 'svobodno.sqlite'), UPLOAD_FOLDER=os.path.join(app.instance_path, 'uploads'), SESSION_COOKIE_HTTPONLY=True,
                       SESSION_COOKIE_SAMESITE='Lax', SESSION_COOKIE_SECURE=os.environ.get('COOKIE_SECURE', '').lower() in ('1', 'true', 'yes'), MAX_CONTENT_LENGTH=1024 * 1024,
                       SMTP_HOST=os.environ.get('SMTP_HOST', ''), SMTP_PORT=int(os.environ.get('SMTP_PORT', '587')),
                       SMTP_USERNAME=os.environ.get('SMTP_USERNAME', ''), SMTP_PASSWORD=os.environ.get('SMTP_PASSWORD', ''),
@@ -38,6 +39,7 @@ def create_app(test_config=None):
     if test_config:
         app.config.update(test_config)
     Path(app.instance_path).mkdir(exist_ok=True)
+    Path(app.config['UPLOAD_FOLDER']).mkdir(exist_ok=True)
     key = Path(app.instance_path) / 'session.key'
     if not key.exists():
         try:
@@ -81,6 +83,10 @@ def create_app(test_config=None):
         if request.method in ('POST', 'PATCH', 'DELETE'):
             if not session.get('csrf') or request.headers.get('X-CSRF-Token') != session['csrf']:
                 return fail('Обновите страницу и повторите действие', 403)
+            if request.path == '/api/profile/avatar':
+                if not request.content_type or not request.content_type.startswith('multipart/form-data'):
+                    return fail('Ожидается файл изображения', 415)
+                return None
             if not request.is_json:
                 return fail('Ожидается JSON', 415)
             if not isinstance(request.get_json(), dict):
@@ -107,7 +113,7 @@ def create_app(test_config=None):
     def current():
         session.setdefault('csrf', secrets.token_hex(24))
         with db() as c:
-            user = c.execute('SELECT id,name,email,role,specialist_id FROM users WHERE id=?', (session.get('uid'),)).fetchone()
+            user = c.execute('SELECT id,name,email,role,specialist_id,avatar FROM users WHERE id=?', (session.get('uid'),)).fetchone()
         return jsonify(user=dict(user) if user else None, csrf=session['csrf'])
 
     @app.post('/api/login')
@@ -199,6 +205,94 @@ def create_app(test_config=None):
     def logout():
         session.clear()
         return current()
+
+    @app.patch('/api/profile')
+    @auth()
+    def update_profile(user):
+        data = request.get_json()
+        name = str(data.get('name', '')).strip()
+        current_password = str(data.get('current_password', ''))
+        new_password = str(data.get('new_password', ''))
+        confirmation = str(data.get('confirmation', ''))
+        if not 2 <= len(name) <= 80:
+            return fail('ФИО должно содержать от 2 до 80 символов')
+        if current_password or new_password or confirmation:
+            if not check_password_hash(user['password'], current_password):
+                return fail('Текущий пароль указан неверно', 403)
+            if not 8 <= len(new_password) <= 128 or new_password != confirmation:
+                return fail('Новый пароль должен содержать от 8 до 128 символов, а подтверждение должно совпадать')
+        with db() as c:
+            if new_password:
+                c.execute('UPDATE users SET name=?, password=? WHERE id=?',
+                          (name, generate_password_hash(new_password), user['id']))
+            else:
+                c.execute('UPDATE users SET name=? WHERE id=?', (name, user['id']))
+        return current()
+
+    @app.post('/api/profile/avatar')
+    @auth()
+    def update_avatar(user):
+        image = request.files.get('avatar')
+        if not image or not image.filename:
+            return fail('Выберите изображение')
+        if image.mimetype not in {'image/jpeg', 'image/png', 'image/webp'}:
+            return fail('Поддерживаются только JPG, PNG и WEBP', 415)
+        header = image.stream.read(12)
+        image.stream.seek(0)
+        valid = header.startswith(b'\xff\xd8\xff') or header.startswith(b'\x89PNG\r\n\x1a\n') or (
+            header[:4] == b'RIFF' and header[8:12] == b'WEBP'
+        )
+        if not valid:
+            return fail('Файл не похож на изображение', 415)
+        filename = secure_filename(image.filename)
+        extension = filename.rsplit('.', 1)[1].lower() if '.' in filename else ''
+        if extension not in {'jpg', 'jpeg', 'png', 'webp'}:
+            return fail('Укажите файл JPG, PNG или WEBP', 415)
+        name = f"user-{user['id']}-{secrets.token_hex(12)}.{extension}"
+        path = Path(app.config['UPLOAD_FOLDER']) / name
+        image.save(path)
+        old = user['avatar']
+        with db() as c:
+            c.execute('UPDATE users SET avatar=? WHERE id=?', (f'/uploads/{name}', user['id']))
+        if old and old.startswith('/uploads/'):
+            old_path = Path(app.config['UPLOAD_FOLDER']) / Path(old).name
+            if old_path.exists():
+                try:
+                    old_path.unlink()
+                except OSError:
+                    pass
+        return current()
+
+    @app.delete('/api/account')
+    @auth('client')
+    def delete_account(user):
+        with db() as c:
+            active = c.execute(
+                '''SELECT 1 FROM bookings b JOIN slots s ON s.id=b.slot_id
+                   WHERE b.user_id=? AND b.status='confirmed' AND s.starts_at>? LIMIT 1''',
+                (user['id'], now().isoformat(timespec='minutes'))).fetchone()
+            if active:
+                return fail('Сначала отмените все предстоящие записи', 409)
+            c.execute('DELETE FROM notifications WHERE user_id=?', (user['id'],))
+            c.execute('DELETE FROM reviews WHERE user_id=?', (user['id'],))
+            c.execute('DELETE FROM searches WHERE user_id=?', (user['id'],))
+            c.execute('DELETE FROM password_reset_tokens WHERE user_id=?', (user['id'],))
+            c.execute('DELETE FROM bookings WHERE user_id=?', (user['id'],))
+            c.execute('DELETE FROM users WHERE id=?', (user['id'],))
+        if user['avatar'] and user['avatar'].startswith('/uploads/'):
+            avatar_path = Path(app.config['UPLOAD_FOLDER']) / Path(user['avatar']).name
+            if avatar_path.exists():
+                try:
+                    avatar_path.unlink()
+                except OSError:
+                    pass
+        session.clear()
+        return current()
+
+    @app.get('/uploads/<path:name>')
+    def uploaded_file(name):
+        return send_from_directory(app.config['UPLOAD_FOLDER'], name)
+
 
     @app.get('/api/catalog')
     def catalog():
