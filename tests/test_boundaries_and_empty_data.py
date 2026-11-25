@@ -148,4 +148,6 @@ def test_partial_database_with_no_services_or_slots_is_safe(tmp_path):
     master = client(app, 'master')
     dashboard = master.get('/api/master')
     assert dashboard.status_code == 200
-    assert dashboard.json == {'services': [], 'slots': []}
+    assert dashboard.json['services'] == []
+    assert dashboard.json['slots'] == []
+    assert dashboard.json['categories'] != []
