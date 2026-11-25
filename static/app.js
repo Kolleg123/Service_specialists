@@ -6,6 +6,7 @@ const date = s => new Date(s.length === 10 ? s + 'T12:00' : s).toLocaleDateStrin
 const reviewCount = n => `${n} ${n % 100 >= 11 && n % 100 <= 14 ? 'отзывов' : n % 10 === 1 ? 'отзыв' : n % 10 >= 2 && n % 10 <= 4 ? 'отзыва' : 'отзывов'}`;
 const time = s => s.slice(11,16);
 const localNow = () => new Date().toLocaleString('sv-SE', {timeZone:'Europe/Kirov'}).replace(' ', 'T').slice(0,16);
+const serviceStatus = {pending:'На проверке',approved:'Одобрена',rejected:'Отклонена'};
 const icons = {'Все специалисты':'✧','Дом и ремонт':'⌂','Красота':'✂','Обучение':'▤','Здоровье':'♡','Мероприятия':'◎'};
 let state = {user:null, csrf:'', specialists:[], categories:[], category:'Все специалисты', query:'', sort:'recommended', maxPrice:'', mode:''};
 let dashboardTab = 'bookings';
@@ -104,7 +105,7 @@ function bindNotifications(user) {
    <button id="notifications-mark-read" class="text-button" ${unread?'':'disabled'}>Прочитать всё</button>
   </div><div class="notification-list">${notifications.length?notifications.map(n=>`
    <article class="notification-item ${n.is_read?'read':'unread'}">
-    <span class="notification-dot ${n.event==='cancelled'?'warning':'success'}" aria-hidden="true"></span>
+    <span class="notification-dot ${['cancelled','service_rejected'].includes(n.event)?'warning':'success'}" aria-hidden="true"></span>
     <div class="notification-copy"><strong>${esc(n.message)}</strong>
      <small>${date(n.created_at.slice(0,10)+'T12:00:00')} · ${time(n.created_at)} (Киров)</small>
      ${n.is_read?'<small>Прочитано</small>':`<button class="text-button" data-read-notification="${esc(n.id)}">Отметить прочитанным</button>`}
@@ -195,7 +196,7 @@ async function dashboard() {
  const data=await api('/dashboard');
  if (requestId !== dashboardRequest || state.user !== user || location.hash !== '#dashboard') return;
  const isClient=user.role==='client', isMaster=user.role==='master', isAdmin=user.role==='admin';
- const tabs=isClient?[['bookings','Мои записи'],['searches','История поиска'],['reviews','Мои отзывы']]:isMaster?[['bookings','Записи клиентов'],['schedule','Моё расписание'],['services','Мои услуги']]:[['bookings','Все записи'],['moderation','Модерация отзывов'],['people','Специалисты и услуги']];
+ const tabs=isClient?[['bookings','Мои записи'],['searches','История поиска'],['reviews','Мои отзывы']]:isMaster?[['bookings','Записи клиентов'],['schedule','Моё расписание'],['services','Мои услуги']]:[['bookings','Все записи'],['moderation','Модерация отзывов'],['service-applications','Заявки на услуги'],['people','Специалисты и услуги']];
  if(!tabs.some(x=>x[0]===dashboardTab))dashboardTab='bookings';
  const notificationControl=isAdmin?'':`<div class="notification-control"><button id="notifications-toggle" class="button outline notification-trigger" aria-label="Уведомления" aria-expanded="false" aria-controls="notifications-panel"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 9a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9M10 21h4"/></svg><span>Уведомления</span><span class="notification-count hidden" aria-hidden="true"></span></button><div id="notifications-panel" class="notification-panel hidden" aria-label="Список уведомлений"></div></div>`;
  $('#app').innerHTML=`<section class="dashboard"><div class="dashboard-heading"><div><span class="eyebrow">${isClient?'ЛИЧНЫЙ КАБИНЕТ':isMaster?'КАБИНЕТ СПЕЦИАЛИСТА':'АДМИНИСТРИРОВАНИЕ'}</span><h1>Здравствуйте, ${esc(user.name.split(' ')[0])}<span class="wave">✧</span></h1><p class="muted">${isClient?'Встречи, которые делают жизнь проще.':isMaster?'Ваше время, ваши услуги и ваши клиенты.':'Управляйте качеством сервиса и публикациями.'}</p></div><div class="dashboard-actions">${notificationControl}<button id="logout" class="button outline">Выйти ↗</button></div></div><div class="stats"><div><span>${isClient?'Предстоящих встреч':'Активных записей'}</span><strong>${data.bookings.filter(b=>isClient?b.phase==='upcoming':b.status==='confirmed').length}</strong></div><div><span>Завершённых встреч</span><strong>${data.bookings.filter(b=>b.status==='completed').length}</strong></div><div><span>${isAdmin?'На модерации':'Всего записей'}</span><strong>${isAdmin?data.reviews.filter(r=>r.status==='pending').length:data.bookings.length}</strong></div></div><div class="dashboard-tabs">${tabs.map(([id,t])=>`<button data-tab="${id}" class="${dashboardTab===id?'selected':''}">${t}</button>`).join('')}</div><div id="dashboard-content"></div></section>`;
@@ -234,12 +235,46 @@ async function dashboard() {
    form.onsubmit=async e=>{e.preventDefault();const d=Object.fromEntries(new FormData(form));d.service_id=Number(d.service_id);d.capacity=Number(d.capacity);try{await api('/master/slots',d);await dashboard();toast('Слот добавлен');}catch(e){$('.form-error',form).textContent=e.message;}};
    $$('[data-close-slot]').forEach(b=>b.onclick=async()=>{try{await api('/master/slots/'+b.dataset.closeSlot+'/close',{});await dashboard();toast('Слот закрыт');}catch(e){toast(e.message);}});
   }else{
-   root.innerHTML=`<h2>Мои услуги</h2><div class="service-list">${m.services.map(s=>`<article class="panel service-row"><div><h3>${esc(s.title)}</h3><p>${s.mode} · ${s.duration} минут ${s.active?'':'· Скрыто модератором'}</p></div><strong>${money(s.price)}</strong></article>`).join('')}</div><h3>Добавить услугу</h3><form id="service-form" class="panel form-grid"><label class="field">Название<input name="title" minlength="3" maxlength="100" required></label><label class="field">Стоимость, ₽<input name="price" type="number" min="0" max="1000000" required></label><label class="field">Длительность, мин<input name="duration" type="number" min="15" max="480" value="60" required></label><label class="field">Формат<select name="mode">${['Выезд','У специалиста','Онлайн','Группа'].map(x=>`<option>${x}</option>`).join('')}</select></label><button class="button">Добавить услугу +</button><p class="form-error" role="alert"></p></form>`;
-   const form=$('#service-form');form.onsubmit=async e=>{e.preventDefault();const d=Object.fromEntries(new FormData(form));d.price=Number(d.price);d.duration=Number(d.duration);try{await api('/master/services',d);await refreshCatalog();await dashboard();toast('Услуга добавлена');}catch(e){$('.form-error',form).textContent=e.message;}};
+   root.innerHTML=`<h2>Мои услуги</h2><div class="service-list">${m.services.map(s=>`<article class="panel service-row"><div><h3>${esc(s.title)}</h3><p>${s.mode} · ${s.duration} минут · ${serviceStatus[s.moderation_status]}${s.active?'':' · Скрыта'}</p>${s.moderation_reason?`<p>Причина отклонения: ${esc(s.moderation_reason)}</p>`:''}</div><strong>${money(s.price)}</strong></article>`).join('')}</div><h3>Добавить услугу</h3><form id="service-form" class="panel form-grid"><label class="field">Название<input name="title" minlength="3" maxlength="100" required></label><label class="field">Стоимость, ₽<input name="price" type="number" min="0" max="1000000" required></label><label class="field">Длительность, мин<input name="duration" type="number" min="15" max="480" value="60" required></label><label class="field">Формат<select name="mode">${['Выезд','У специалиста','Онлайн','Группа'].map(x=>`<option>${x}</option>`).join('')}</select></label><button class="button">Добавить услугу +</button><p class="form-error" role="alert"></p></form>`;
+   const form=$('#service-form');form.onsubmit=async e=>{e.preventDefault();const d=Object.fromEntries(new FormData(form));d.price=Number(d.price);d.duration=Number(d.duration);try{await api('/master/services',d);await refreshCatalog();await dashboard();toast('Услуга отправлена на проверку');}catch(e){$('.form-error',form).textContent=e.message;}};
   }
+ }else if(dashboardTab==='service-applications'){
+  const {applications} = await api('/admin/service-applications');
+  if (requestId !== dashboardRequest || !root.isConnected) return;
+  root.innerHTML = '<h2>Заявки на услуги</h2>' + (applications.length ? applications.map(service => `
+   <article class="panel">
+    <h3>${esc(service.title)}</h3>
+    <p>${esc(service.specialist)} · ${esc(service.mode)} · ${service.duration} мин · ${money(service.price)}</p>
+    <form data-service-decision="${service.id}">
+     <label class="field">Причина отклонения<textarea name="reason" maxlength="500"></textarea></label>
+     <p class="form-error" role="alert"></p>
+     <div class="dialog-actions">
+      <button value="approved" class="button pale">Одобрить</button>
+      <button value="rejected" class="button outline">Отклонить</button>
+     </div>
+    </form>
+   </article>`).join('') : '<div class="empty">Новых заявок нет.</div>');
+  $$('[data-service-decision]', root).forEach(form => form.onsubmit = async event => {
+   event.preventDefault();
+   const status = event.submitter?.value;
+   if (!status) return;
+   const buttons = $$('button', form);
+   buttons.forEach(button => button.disabled = true);
+   try {
+    await api(`/admin/service-applications/${form.dataset.serviceDecision}/decision`, {
+     status, reason: form.elements.reason.value
+    });
+    await dashboard();
+    toast('Решение сохранено');
+   } catch (error) {
+    $('.form-error', form).textContent = error.message;
+   } finally {
+    buttons.forEach(button => button.disabled = false);
+   }
+  });
  }else if(dashboardTab==='people'){
   const a=await api('/admin');
-  root.innerHTML='<h2>Специалисты и услуги</h2><p class="muted">Скрытые специалисты и услуги недоступны для новых записей. Существующие записи сохраняются.</p>'+a.specialists.map(s=>`<article class="panel admin-person"><div class="service-row"><div><h3>${esc(s.name)}</h3><p>${esc(s.profession)} · ${s.active?'В каталоге':'Скрыт'}</p></div><button class="button ${s.active?'outline':'pale'}" data-toggle="specialist" data-id="${s.id}" data-active="${!s.active}">${s.active?'Скрыть':'Показать'}</button></div>${a.services.filter(v=>v.specialist_id===s.id).map(v=>`<div class="admin-service"><span>${esc(v.title)} · ${money(v.price)}</span><button class="text-button" data-toggle="service" data-id="${v.id}" data-active="${!v.active}">${v.active?'Скрыть услугу':'Показать услугу'}</button></div>`).join('')}</article>`).join('');
+  root.innerHTML='<h2>Специалисты и услуги</h2><p class="muted">Скрытые специалисты и услуги недоступны для новых записей. Существующие записи сохраняются.</p>'+a.specialists.map(s=>`<article class="panel admin-person"><div class="service-row"><div><h3>${esc(s.name)}</h3><p>${esc(s.profession)} · ${s.active?'В каталоге':'Скрыт'}</p></div><button class="button ${s.active?'outline':'pale'}" data-toggle="specialist" data-id="${s.id}" data-active="${!s.active}">${s.active?'Скрыть':'Показать'}</button></div>${a.services.filter(v=>v.specialist_id===s.id).map(v=>`<div class="admin-service"><span>${esc(v.title)} · ${money(v.price)} · ${serviceStatus[v.moderation_status]}</span><button class="text-button" data-toggle="service" data-id="${v.id}" data-active="${!v.active}">${v.active?'Скрыть услугу':'Показать услугу'}</button></div>`).join('')}</article>`).join('');
   $$('[data-toggle]').forEach(b=>b.onclick=async()=>{try{await api('/admin/moderate',{kind:b.dataset.toggle,id:Number(b.dataset.id),active:b.dataset.active==='true'});await refreshCatalog();await dashboard();toast('Изменения сохранены');}catch(e){toast(e.message);}});
  }
 }

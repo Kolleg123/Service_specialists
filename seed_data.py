@@ -18,17 +18,6 @@ CREATE TABLE IF NOT EXISTS specialist_schedules(
     daily_limit INTEGER
 );
 CREATE TABLE IF NOT EXISTS bookings(id INTEGER PRIMARY KEY,user_id INTEGER REFERENCES users(id),slot_id INTEGER REFERENCES slots(id),quantity INTEGER CHECK(quantity>0),address TEXT,note TEXT,status TEXT,created_at TEXT,total INTEGER);
-CREATE TABLE IF NOT EXISTS notifications(
-    id INTEGER PRIMARY KEY,
-    user_id INTEGER NOT NULL REFERENCES users(id),
-    booking_id INTEGER NOT NULL REFERENCES bookings(id),
-    event TEXT NOT NULL CHECK(event IN ('confirmed','cancelled','completed')),
-    message TEXT NOT NULL,
-    created_at TEXT NOT NULL,
-    is_read INTEGER NOT NULL DEFAULT 0 CHECK(is_read IN (0,1)),
-    UNIQUE(user_id,booking_id,event)
-);
-CREATE INDEX IF NOT EXISTS notification_inbox ON notifications(user_id,id DESC);
 CREATE TABLE IF NOT EXISTS reviews(id INTEGER PRIMARY KEY,user_id INTEGER REFERENCES users(id),specialist_id INTEGER REFERENCES specialists(id),booking_id INTEGER UNIQUE REFERENCES bookings(id),rating INTEGER CHECK(rating BETWEEN 1 AND 5),content TEXT,status TEXT,created_at TEXT);
 CREATE TABLE IF NOT EXISTS searches(id INTEGER PRIMARY KEY,user_id INTEGER REFERENCES users(id),query TEXT,created_at TEXT);
 CREATE TABLE IF NOT EXISTS password_reset_tokens(id INTEGER PRIMARY KEY,user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,token_hash TEXT NOT NULL UNIQUE,expires_at TEXT NOT NULL,created_at TEXT NOT NULL);
@@ -42,6 +31,47 @@ CREATE INDEX IF NOT EXISTS slot_specialist ON slots(specialist_id,starts_at);
 CREATE TABLE IF NOT EXISTS seed_meta(name TEXT PRIMARY KEY,value TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS seed_entities(seed_key TEXT PRIMARY KEY,table_name TEXT NOT NULL,entity_id INTEGER NOT NULL);
 """
+
+NOTIFICATIONS_TABLE = """
+CREATE TABLE notifications(
+    id INTEGER PRIMARY KEY,
+    user_id INTEGER NOT NULL REFERENCES users(id),
+    booking_id INTEGER REFERENCES bookings(id) ON DELETE CASCADE,
+    service_id INTEGER REFERENCES services(id) ON DELETE CASCADE,
+    event TEXT NOT NULL,
+    message TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    is_read INTEGER NOT NULL DEFAULT 0 CHECK(is_read IN (0,1)),
+    CHECK(
+        (booking_id IS NOT NULL AND service_id IS NULL AND event IN ('confirmed','cancelled','completed'))
+        OR
+        (booking_id IS NULL AND service_id IS NOT NULL AND event IN ('service_approved','service_rejected'))
+    ),
+    UNIQUE(user_id,booking_id,event),
+    UNIQUE(user_id,service_id)
+)
+"""
+
+
+def migrate_service_moderation(connection):
+    columns = {row['name'] for row in connection.execute('PRAGMA table_info(services)')}
+    if 'moderation_status' not in columns:
+        connection.execute("""ALTER TABLE services ADD COLUMN moderation_status TEXT NOT NULL
+            DEFAULT 'approved' CHECK(moderation_status IN ('pending','approved','rejected'))""")
+    if 'moderation_reason' not in columns:
+        connection.execute('ALTER TABLE services ADD COLUMN moderation_reason TEXT')
+
+    columns = {row['name'] for row in connection.execute('PRAGMA table_info(notifications)')}
+    if columns and 'service_id' not in columns:
+        connection.execute('ALTER TABLE notifications RENAME TO previous_notifications')
+        connection.execute(NOTIFICATIONS_TABLE)
+        connection.execute("""INSERT INTO notifications(id,user_id,booking_id,event,message,created_at,is_read)
+            SELECT id,user_id,booking_id,event,message,created_at,is_read FROM previous_notifications""")
+        connection.execute('DROP TABLE previous_notifications')
+    elif not columns:
+        connection.execute(NOTIFICATIONS_TABLE)
+    connection.execute('CREATE INDEX IF NOT EXISTS notification_inbox ON notifications(user_id,id DESC)')
+
 
 PEOPLE = [('Алексей Морозов',
   'Сантехник',
@@ -151,6 +181,7 @@ def initialize_database(connection, current_time):
         connection.execute("ALTER TABLE slots ADD COLUMN booking_mode TEXT NOT NULL DEFAULT 'manual'")
     if 'ends_at' not in slot_columns:
         connection.execute('ALTER TABLE slots ADD COLUMN ends_at TEXT')
+    migrate_service_moderation(connection)
     specialist_ids = {}
     for index, person in enumerate(PEOPLE, 1):
         keys = ['name','profession','category','experience','education','skills','bio']

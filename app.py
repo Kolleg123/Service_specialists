@@ -16,6 +16,7 @@ from booking_schedule import save_schedule, schedule_for
 from booking_service import BookingError, available_slots, create_booking
 from booking_lifecycle import booking_interval, booking_policy, transition_booking
 from password_recovery import send_recovery_email
+from service_moderation import ModerationError, PUBLIC_SERVICE, decide_service
 
 load_dotenv()
 
@@ -210,7 +211,9 @@ def create_app(test_config=None):
                 s = dict(row)
                 schedule = schedule_for(c, s['id'])
                 s['booking_mode'] = schedule['mode'] if schedule else 'manual'
-                s['services'] = [dict(r) for r in c.execute('SELECT * FROM services WHERE specialist_id=? AND active=1', (s['id'],))]
+                s['services'] = [dict(r) for r in c.execute(f'''SELECT v.id,v.specialist_id,v.title,v.price,v.duration,v.mode,v.active
+                    FROM services v JOIN specialists p ON p.id=v.specialist_id
+                    WHERE p.id=? AND {PUBLIC_SERVICE}''', (s['id'],))]
                 s['reviews'] = [dict(r) for r in c.execute('SELECT r.*,u.name FROM reviews r JOIN users u ON r.user_id=u.id WHERE r.specialist_id=? AND r.status="approved" ORDER BY r.id DESC', (s['id'],))]
                 s['rating'] = round(sum(r['rating'] for r in s['reviews']) / len(s['reviews']), 1) if s['reviews'] else None
                 try:
@@ -221,6 +224,16 @@ def create_app(test_config=None):
                 s['next_slot_mode'] = next_slot['booking_mode'] if next_slot else None
                 specialists.append(s)
         return jsonify(specialists=specialists, categories=CATEGORIES, timezone='Europe/Kirov')
+
+    @app.get('/api/services/<int:ident>')
+    def public_service(ident):
+        if not 1 <= ident < 2**63:
+            return fail('Услуга не найдена', 404)
+        with db() as c:
+            service = c.execute(f'''SELECT v.id,v.specialist_id,v.title,v.price,v.duration,v.mode,v.active
+                FROM services v JOIN specialists p ON p.id=v.specialist_id
+                WHERE v.id=? AND {PUBLIC_SERVICE}''', (ident,)).fetchone()
+        return jsonify(service=dict(service)) if service else fail('Услуга не найдена', 404)
 
     @app.get('/api/slots/<int:specialist_id>')
     def slots(specialist_id):
@@ -257,7 +270,7 @@ def create_app(test_config=None):
     def notifications(user):
         with db() as c:
             rows = c.execute(
-                'SELECT id,booking_id,event,message,created_at,is_read FROM notifications WHERE user_id=? ORDER BY id DESC',
+                'SELECT id,booking_id,service_id,event,message,created_at,is_read FROM notifications WHERE user_id=? ORDER BY id DESC',
                 (user['id'],)).fetchall()
         return jsonify(notifications=[{**dict(row), 'is_read': bool(row['is_read'])} for row in rows])
 
@@ -353,8 +366,10 @@ def create_app(test_config=None):
         for words, ident, reply in rules:
             if any(w in message for w in words):
                 with db() as c:
-                    active = c.execute('SELECT p.id,p.active FROM seed_entities e JOIN specialists p ON p.id=e.entity_id WHERE e.seed_key=?', (f'specialist:{ident}',)).fetchone()
-                if active and active['active']:
+                    active = c.execute(f'''SELECT p.id FROM seed_entities e JOIN specialists p ON p.id=e.entity_id
+                        WHERE e.seed_key=? AND EXISTS(
+                            SELECT 1 FROM services v WHERE v.specialist_id=p.id AND {PUBLIC_SERVICE})''', (f'specialist:{ident}',)).fetchone()
+                if active:
                     return jsonify(reply=reply, specialist_id=active['id'])
                 return jsonify(reply='Специалист этой категории сейчас недоступен. Попробуйте поискать в каталоге позже.', specialist_id=None)
         return jsonify(reply='Расскажите чуть подробнее: нужна помощь с ремонтом дома, стрижкой, английским, массажем или фотографией? Я подберу категорию и предложу специалиста.', specialist_id=None)
@@ -395,8 +410,11 @@ def create_app(test_config=None):
         if not 3 <= len(title) <= 100 or mode not in ['Выезд', 'У специалиста', 'Онлайн', 'Группа'] or type(price) is not int or not 0 <= price <= 1000000 or type(duration) is not int or not 15 <= duration <= 480:
             return fail('Проверьте название, формат, стоимость и длительность (15–480 минут)')
         with db() as c:
-            c.execute('INSERT INTO services(specialist_id,title,price,duration,mode) VALUES(?,?,?,?,?)', (user['specialist_id'], title, price, duration, mode))
-        return jsonify(ok=True), 201
+            if not c.execute('SELECT 1 FROM specialists WHERE id=?', (user['specialist_id'],)).fetchone():
+                return fail('Профиль специалиста не найден', 404)
+            ident = c.execute('''INSERT INTO services(specialist_id,title,price,duration,mode,moderation_status)
+                VALUES(?,?,?,?,?,'pending')''', (user['specialist_id'], title, price, duration, mode)).lastrowid
+        return jsonify(ok=True, id=ident, moderation_status='pending'), 201
 
     @app.post('/api/master/slots')
     @auth('master')
@@ -452,6 +470,27 @@ def create_app(test_config=None):
         with db() as c:
             return jsonify(specialists=[dict(r) for r in c.execute('SELECT * FROM specialists')],
                            services=[dict(r) for r in c.execute('SELECT v.*,p.name specialist FROM services v JOIN specialists p ON p.id=v.specialist_id')])
+
+    @app.get('/api/admin/service-applications')
+    @auth('admin')
+    def service_applications(user):
+        with db() as c:
+            applications = c.execute('''SELECT v.*,p.name specialist FROM services v
+                JOIN specialists p ON p.id=v.specialist_id WHERE v.moderation_status='pending'
+                ORDER BY v.id''').fetchall()
+        return jsonify(applications=[dict(row) for row in applications])
+
+    @app.post('/api/admin/service-applications/<int:ident>/decision')
+    @auth('admin')
+    def service_decision(user, ident):
+        if not 1 <= ident < 2**63:
+            return fail('Услуга не найдена', 404)
+        try:
+            with db() as c:
+                service = decide_service(c, ident, request.get_json(), now)
+        except ModerationError as error:
+            return fail(str(error), error.status)
+        return jsonify(service=service)
 
     @app.post('/api/admin/moderate')
     @auth('admin')

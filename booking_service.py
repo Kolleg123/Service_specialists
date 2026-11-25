@@ -4,6 +4,7 @@ from datetime import date, datetime, time, timedelta
 
 from booking_notifications import notify_booking
 from booking_schedule import BOOKING_WINDOW_DAYS, schedule_for, schedule_windows
+from service_moderation import PUBLIC_SERVICE
 
 
 class BookingError(Exception):
@@ -58,8 +59,8 @@ def _daily_usage(connection, specialist_id):
 
 
 def _services(connection, specialist_id, service_id):
-    return connection.execute('''SELECT v.* FROM services v JOIN specialists p ON p.id=v.specialist_id
-        WHERE p.id=? AND p.active=1 AND v.active=1 AND (? IS NULL OR v.id=?) ORDER BY v.id''',
+    return connection.execute(f'''SELECT v.* FROM services v JOIN specialists p ON p.id=v.specialist_id
+        WHERE p.id=? AND {PUBLIC_SERVICE} AND (? IS NULL OR v.id=?) ORDER BY v.id''',
         (specialist_id, service_id, service_id)).fetchall()
 
 
@@ -92,12 +93,12 @@ def _scheduled_slots(connection, schedule, services, current_time, requested_day
 
 
 def _manual_slots(connection, specialist_id, current_time, service_id):
-    rows = connection.execute('''SELECT s.*,v.title service,v.duration,v.price,v.mode,
+    rows = connection.execute(f'''SELECT s.*,v.title service,v.duration,v.price,v.mode,
         s.capacity-COALESCE((SELECT SUM(b.quantity) FROM bookings b
             WHERE b.slot_id=s.id AND b.status='confirmed'),0) remaining
         FROM slots s JOIN services v ON s.service_id=v.id
         JOIN specialists p ON p.id=s.specialist_id
-        WHERE s.specialist_id=? AND s.booking_mode='manual' AND s.active=1 AND v.active=1 AND p.active=1
+        WHERE s.specialist_id=? AND s.booking_mode='manual' AND s.active=1 AND {PUBLIC_SERVICE}
           AND (? IS NULL OR v.id=?) ORDER BY s.starts_at''', (specialist_id, service_id, service_id))
     intervals = None
     for row in rows:
@@ -173,12 +174,11 @@ def create_booking(connection, user_id, data, clock):
     connection.execute('BEGIN IMMEDIATE')
     current_time = clock()
     if mode == 'manual':
-        slot = connection.execute('''SELECT s.*,v.mode,v.price,v.duration,
-            v.active service_active,p.active specialist_active FROM slots s
+        slot = connection.execute(f'''SELECT s.*,v.mode,v.price,v.duration FROM slots s
             JOIN services v ON v.id=s.service_id JOIN specialists p ON p.id=s.specialist_id
-            WHERE s.id=? AND s.booking_mode='manual' ''', (slot_id,)).fetchone()
-        if (not slot or not slot['active'] or not slot['service_active'] or not slot['specialist_active']
-                or schedule_for(connection, slot['specialist_id']) is not None):
+            WHERE s.id=? AND s.active=1 AND s.booking_mode='manual' AND {PUBLIC_SERVICE}''',
+            (slot_id,)).fetchone()
+        if not slot or schedule_for(connection, slot['specialist_id']) is not None:
             raise BookingError('Это время больше недоступно. Выберите другой слот.', 409)
         start, end = slot_interval(slot)
         if start <= current_time:
