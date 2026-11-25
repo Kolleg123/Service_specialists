@@ -307,11 +307,13 @@ def test_profile_rejects_wrong_current_password(app):
 
 def test_specialist_can_delete_own_account(app):
     c = client(app, 'master')
+    specialist_id = c.get('/api/session').json['user']['specialist_id']
+    assert specialist_id is not None
     result = c.delete('/api/account', headers={'X-CSRF-Token': c.get('/api/session').json['csrf']})
     assert result.status_code == 200
     assert result.json['user'] is None
     assert c.get('/api/dashboard').status_code == 401
-    assert not c.get('/api/catalog').json['specialists'][0]['name'] == 'Алексей Морозов'
+    assert specialist_id not in [s['id'] for s in c.get('/api/catalog').json['specialists']]
 
 
 def test_admin_can_delete_specialist(app):
