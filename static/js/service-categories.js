@@ -48,23 +48,31 @@ function bindCatalogCategories() {
 function serviceCategoryFields() {
  return `<label class="field">Направление<select name="category_group"></select></label>
   <label class="field">Поиск категории<input type="search" data-category-search placeholder="Например, сантехника"></label>
-  <label class="field">Категория услуги<select name="category_id" required></select></label>`;
+  <label class="field">Категория услуги<select name="category_id" required></select>
+   <span class="form-error category-unavailable" role="status"></span></label>
+  <button type="button" class="text-button" data-suggest-category>Не нашли нужную категорию?</button>`;
 }
 
 function bindServiceCategories(form, groups, initialCategory) {
  const direction = form.elements.category_group;
  const category = form.elements.category_id;
  const search = $('[data-category-search]', form);
+ const warning = $('.category-unavailable', form);
  const groupOf = id => groups.find(group => group.categories.some(item => item.id === id));
- direction.innerHTML = '<option value="">Все направления</option>' + categoryOptions(groups);
- direction.value = groupOf(initialCategory)?.id ?? '';
+ const populateDirections = selected => {
+  direction.innerHTML = '<option value="">Все направления</option>' + categoryOptions(groups);
+  direction.value = groups.some(group => group.id === selected) ? selected : '';
+ };
 
  function update(selected) {
   const query = search.value.trim().toLowerCase().replaceAll('ё', 'е');
   const matches = item => item.id === selected || item.name.toLowerCase().replaceAll('ё', 'е').includes(query);
   const options = categorySelectOptions(groups, direction.value, matches);
   category.innerHTML = `<option value="">${options ? 'Выберите категорию' : 'Категории не найдены'}</option>` + options;
-  category.value = selected;
+  category.value = selected && groupOf(selected) ? selected : '';
+  if (selected && !groupOf(selected)) {
+   warning.textContent = 'Выбранная категория больше недоступна. Выберите другую.';
+  }
  }
 
  direction.onchange = () => {
@@ -73,9 +81,21 @@ function bindServiceCategories(form, groups, initialCategory) {
  };
  search.oninput = () => update(category.value);
  category.onchange = () => {
+  if (category.value) warning.textContent = '';
   direction.value = groupOf(category.value)?.id ?? direction.value;
   update(category.value);
  };
+ let snapshot = JSON.stringify(groups);
+ form.updateServiceDirectory = next => {
+  const signature = JSON.stringify(next);
+  if (signature === snapshot) return;
+  const selected = category.value;
+  groups = next;
+  snapshot = signature;
+  populateDirections(groupOf(selected)?.id ?? direction.value);
+  update(selected);
+ };
+ populateDirections(groupOf(initialCategory)?.id);
  update(initialCategory ?? '');
 }
 

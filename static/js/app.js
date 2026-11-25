@@ -278,19 +278,20 @@ function scheduleDashboardRefresh() {
 }
 
 async function refreshDashboard() {
- if (location.hash !== '#dashboard' && $('#cards') && !document.hidden && !$('#modal').open) {
+ if (location.hash !== '#dashboard' && $('#cards') && !document.hidden) {
   if (catalogRefreshPending) return;
   catalogRefreshPending = true;
   const routeId = catalogRequest;
   try {
    const {specialists, categories} = await api('/catalog');
-   if (routeId === catalogRequest && location.hash !== '#dashboard' && $('#cards') && !$('#modal').open) {
+   if (routeId === catalogRequest && location.hash !== '#dashboard' && $('#cards')) {
     const categoriesChanged = JSON.stringify(categories) !== JSON.stringify(state.categories);
     if (categoriesChanged || JSON.stringify(specialists) !== JSON.stringify(state.specialists)) {
      state.specialists = specialists;
      state.categories = categories;
      if (categoriesChanged) updateCatalogCategories();
      drawCards();
+     if (activeBooking?.alive) activeBooking.updateCategoryLabels(specialists);
     }
    }
   } catch {
@@ -333,7 +334,8 @@ async function renderDashboard(background) {
  const sectionPath = {
   schedule:'/master', services:'/master', people:'/admin',
   'specialist-applications':'/admin/specialist-applications',
-  'service-applications':'/admin/service-applications?status=' + serviceApplicationFilter
+  'service-applications':'/admin/service-applications?status=' + serviceApplicationFilter,
+  support:'/support', categories:'/admin/categories'
  }[tab];
  const [data, section] = await Promise.all([
   api(mode==='client' ? '/dashboard?mode=client' : '/dashboard'),
@@ -349,7 +351,29 @@ async function renderDashboard(background) {
    const badge = $(`[data-pending-tab="${key}"]`);
    if (badge) badge.textContent = count ? ` (${count})` : '';
   }
-  if (snapshot === dashboardSnapshot || $('#modal').open ||
+  if (snapshot === dashboardSnapshot) return;
+  if (previousRoot.dataset.tab === tab && data.user.role === previousUser.role) {
+   if (tab === 'support') {
+    renderSupport(previousRoot, section.items, data.user.role === 'admin');
+    dashboardSnapshot = snapshot;
+    return;
+   }
+   if (tab === 'categories') {
+    renderCategoryDirectory(previousRoot, section.groups);
+    dashboardSnapshot = snapshot;
+    return;
+   }
+   if (tab === 'services') {
+    renderManagedServices(previousRoot, section.services, section.categories);
+    $('#edit-service-form')?.updateServiceDirectory(section.categories);
+    dashboardSnapshot = snapshot;
+    return;
+   }
+   if (tab === 'specialist-application') {
+    $('#specialist-profile-group', previousRoot)?.updateProfileGroups(data.specialist_categories);
+   }
+  }
+  if ($('#modal[open], #support-dialog[open]') ||
       previousRoot.querySelector('form[data-dirty], form :is(input,textarea,select):focus, form button:disabled')) return;
  }
  dashboardSnapshot = snapshot;
@@ -362,6 +386,8 @@ async function renderDashboard(background) {
  const isMaster=hasSpecialistProfile && !isClient;
  if (hasSpecialistProfile) dashboardMode=mode;
  const tabs=isClient?[['bookings','Мои записи'],['searches','История поиска'],['reviews','Мои отзывы']]:isMaster?[['bookings','Записи клиентов'],['schedule','Моё расписание'],['services','Мои услуги']]:[['bookings','Все записи'],['moderation','Модерация отзывов'],['service-applications','Заявки на услуги'],['specialist-applications','Заявки специалистов'],['people','Специалисты и услуги']];
+ if (isAdmin) tabs.push(['support','Обращения'], ['categories','Категории услуг']);
+ else tabs.push(['support','Поддержка']);
  const application=data.specialist_application;
  if (isClient && (!hasSpecialistProfile || application)) {
   const label=!application || application.status==='rejected' ? 'Стать специалистом' : 'Статус заявки';
@@ -372,9 +398,9 @@ async function renderDashboard(background) {
   <option value="master" ${isMaster?'selected':''}>Специалист</option>
  </select></label>` : '';
  if(!tabs.some(x=>x[0]===dashboardTab))dashboardTab='bookings';
- const notificationControl=isAdmin?'':`<div class="notification-control"><button id="notifications-toggle" class="button outline notification-trigger" aria-label="Уведомления" aria-expanded="false" aria-controls="notifications-panel"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 9a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9M10 21h4"/></svg><span>Уведомления</span><span class="notification-count hidden" aria-hidden="true"></span></button><div id="notifications-panel" class="notification-panel hidden" aria-label="Список уведомлений"></div></div>`;
+ const notificationControl=`<div class="notification-control"><button id="notifications-toggle" class="button outline notification-trigger" aria-label="Уведомления" aria-expanded="false" aria-controls="notifications-panel"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 9a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9M10 21h4"/></svg><span>Уведомления</span><span class="notification-count hidden" aria-hidden="true"></span></button><div id="notifications-panel" class="notification-panel hidden" aria-label="Список уведомлений"></div></div>`;
  $('#app').innerHTML=`<section class="dashboard"><div class="dashboard-heading"><div><span class="eyebrow">${isClient?'ЛИЧНЫЙ КАБИНЕТ':isMaster?'КАБИНЕТ СПЕЦИАЛИСТА':'АДМИНИСТРИРОВАНИЕ'}</span><h1>Здравствуйте, ${esc(user.name.split(' ')[0])}<span class="wave">✧</span></h1><p class="muted">${isClient?'Встречи, которые делают жизнь проще.':isMaster?'Ваше время, ваши услуги и ваши клиенты.':'Управляйте качеством сервиса и публикациями.'}</p></div><div class="dashboard-actions">${modeControl}${notificationControl}<button id="logout" class="button outline">Выйти ↗</button></div></div><div class="stats"><div><span>${isClient?'Предстоящих встреч':'Активных записей'}</span><strong>${data.bookings.filter(b=>isClient?b.phase==='upcoming':b.status==='confirmed').length}</strong></div><div><span>Завершённых встреч</span><strong>${data.bookings.filter(b=>b.status==='completed').length}</strong></div><div><span>${isAdmin?'На модерации':'Всего записей'}</span><strong>${isAdmin?data.reviews.filter(r=>r.status==='pending').length:data.bookings.length}</strong></div></div><div class="dashboard-tabs">${tabs.map(([id,t])=>`<button data-tab="${id}" class="${dashboardTab===id?'selected':''}">${t}${id in data.pending ? `<span aria-hidden="true" data-pending-tab="${id}">${data.pending[id] ? ` (${data.pending[id]})` : ''}</span>` : ''}</button>`).join('')}</div><div id="dashboard-content"></div></section>`;
- $('#logout').onclick=async()=>{const r=await api('/logout',{});stopNotificationPolling();state.user=null;state.csrf=r.csrf;specialistApplicationFilter='pending';serviceApplicationFilter='pending';Object.assign(adminFilters,defaultAdminFilters);dashboardMode='master';dashboardTab='bookings';dashboardStatusFilter='all';clearTimeout(dashboardRefreshTimer);updateAccount();location.hash='catalog';catalog();};
+ $('#logout').onclick=async()=>{const r=await api('/logout',{});stopNotificationPolling();state.user=null;state.csrf=r.csrf;specialistApplicationFilter='pending';serviceApplicationFilter='pending';Object.assign(supportView,{status:'',order:'newest'});supportView.open.clear();supportView.drafts.clear();Object.assign(directoryView,{query:'',order:'asc'});directoryView.open.clear();Object.assign(adminFilters,defaultAdminFilters);dashboardMode='master';dashboardTab='bookings';dashboardStatusFilter='all';clearTimeout(dashboardRefreshTimer);updateAccount();location.hash='catalog';catalog();};
  if (hasSpecialistProfile) $('#dashboard-mode').onchange=event=>{
   dashboardMode=event.target.value;
   dashboardTab='bookings';
@@ -384,8 +410,9 @@ async function renderDashboard(background) {
  $$('[data-tab]').forEach(b=>b.onclick=()=>{dashboardTab=b.dataset.tab;dashboard().catch(e=>toast(e.message));});
  if (notificationControlNode && $('#notifications-toggle')) {
   $('.notification-control').replaceWith(notificationControlNode);
- } else if(!isAdmin)bindNotifications(user);
+ } else bindNotifications(user);
  const root=$('#dashboard-content');
+ root.dataset.tab = dashboardTab;
 
  if(dashboardTab==='bookings'){
   root.innerHTML=`<div class="section-title"><h2>${isClient?'Мои встречи':'История записей'}</h2><select id="booking-status" aria-label="Статус записи"><option value="all">Все записи</option><option value="confirmed">Активные</option><option value="completed">Завершённые</option><option value="cancelled">Отменённые</option></select></div><div class="dashboard-update"><p>Время Кирова · UTC+3. Статус и действия проверяет сервер.</p><button id="refresh-bookings" class="button outline">Обновить статусы</button><p id="dashboard-update-status" role="status"></p></div>${isMaster ? '<button id="cancel-all-bookings" class="button outline">Отменить все предстоящие записи</button>' : ''}<div id="booking-list"></div>`;
@@ -451,6 +478,10 @@ async function renderDashboard(background) {
   }else{
    renderManagedServices(root, m.services, m.categories);
   }
+ }else if(dashboardTab==='support'){
+  renderSupport(root, section.items, isAdmin);
+ }else if(dashboardTab==='categories'){
+  renderCategoryDirectory(root, section.groups);
  }else if(dashboardTab==='specialist-application'){
   renderSpecialistApplication(root, application, user, data.specialist_categories);
  }else if(dashboardTab==='specialist-applications'){

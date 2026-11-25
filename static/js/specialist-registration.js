@@ -23,16 +23,28 @@ function renderSpecialistApplication(root, application, user, categories) {
  };
  root.insertAdjacentHTML('beforeend', `<form class="panel form-grid">
   ${applicationTextFields.slice(0, 2).map(textField).join('')}
-  <label class="field">Категория<select name="category" required>
-   <option value="">Выберите категорию</option>
-   ${categories.map(category => `<option ${category === draft.category ? 'selected' : ''}>${esc(category)}</option>`).join('')}
-  </select></label>
+  <label class="field">Категория<select id="specialist-profile-group" name="category" required></select>
+   <span class="form-error profile-group-unavailable" role="status"></span></label>
   <label class="field">Опыт работы, полных лет<input name="experience" type="number" min="0" max="80" required value="${esc(draft.experience)}"></label>
   ${applicationTextFields.slice(2).map(textField).join('')}
   <button class="button">${application ? 'Подать повторную заявку' : 'Отправить заявку'}</button>
   <p class="form-error" role="alert"></p>
  </form>`);
  const form = $('form', root);
+ const select = form.elements.category;
+ const warning = $('.profile-group-unavailable', form);
+ let categorySignature;
+ select.updateProfileGroups = groups => {
+  const signature = JSON.stringify(groups);
+  if (signature === categorySignature) return;
+  const selected = categorySignature === undefined ? draft.category_group_id : select.value;
+  categorySignature = signature;
+  select.innerHTML = '<option value="">Выберите категорию</option>' + categoryOptions(groups);
+  select.value = groups.some(group => group.id === selected) ? selected : '';
+  if (selected && !select.value) warning.textContent = 'Выбранная группа недоступна. Выберите другую.';
+ };
+ select.onchange = () => {warning.textContent = '';};
+ select.updateProfileGroups(categories);
  form.onsubmit = async event => {
   event.preventDefault();
   const data = Object.fromEntries(new FormData(form));

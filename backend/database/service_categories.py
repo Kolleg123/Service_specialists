@@ -133,14 +133,26 @@ def initialize_categories(connection):
         parent_id TEXT REFERENCES service_categories(id),
         CHECK(parent_id IS NULL OR parent_id != id)
     )''')
-    connection.execute('''CREATE UNIQUE INDEX IF NOT EXISTS service_category_name
-        ON service_categories(COALESCE(parent_id, ''), name)''')
-    for ident, name, children in DIRECTORY:
-        connection.executemany('INSERT INTO service_categories(id,name,parent_id) VALUES(?,?,?) ON CONFLICT(id) DO NOTHING',
-                               [(ident, name, None), *((child, label, ident) for child, label in children)])
+    columns = {row['name'] for row in connection.execute('PRAGMA table_info(service_categories)')}
+    if 'archived' not in columns:
+        connection.execute('ALTER TABLE service_categories ADD COLUMN archived INTEGER NOT NULL DEFAULT 0')
+        connection.execute('ALTER TABLE service_categories ADD COLUMN replacement_id TEXT REFERENCES service_categories(id)')
+        connection.execute('DROP INDEX IF EXISTS service_category_name')
+    connection.execute("""CREATE UNIQUE INDEX IF NOT EXISTS active_service_category_name
+        ON service_categories(COALESCE(parent_id, ''), name) WHERE archived=0""")
+    if not connection.execute("SELECT 1 FROM seed_meta WHERE name='service_directory_initialized'").fetchone():
+        for ident, name, children in DIRECTORY:
+            connection.executemany('INSERT INTO service_categories(id,name,parent_id) VALUES(?,?,?) ON CONFLICT(id) DO NOTHING',
+                                   [(ident, name, None), *((child, label, ident) for child, label in children)])
+        connection.execute("INSERT INTO seed_meta(name,value) VALUES('service_directory_initialized','1')")
     columns = {row['name'] for row in connection.execute('PRAGMA table_info(services)')}
     if 'category_id' not in columns:
         connection.execute('ALTER TABLE services ADD COLUMN category_id TEXT REFERENCES service_categories(id)')
+    for table in ('specialists', 'specialist_applications'):
+        columns = {row['name'] for row in connection.execute(f'PRAGMA table_info({table})')}
+        if 'category_group_id' not in columns:
+            connection.execute(f'''ALTER TABLE {table} ADD COLUMN category_group_id TEXT
+                REFERENCES service_categories(id) ON DELETE SET NULL''')
 
 
 def backfill_categories(connection):
@@ -149,18 +161,19 @@ def backfill_categories(connection):
     rows = connection.execute('''SELECT v.id,v.title,v.category_id,v.draft,p.profession FROM services v
         LEFT JOIN specialists p ON p.id=v.specialist_id''').fetchall()
     for row in rows:
-        category = row['category_id'] or infer_category(row['title'], row['profession'])
+        category = row['category_id'] or active_category_id(connection, infer_category(row['title'], row['profession']))
         draft = json.loads(row['draft']) if row['draft'] else None
         if draft is not None and 'category_id' not in draft:
             title = draft.get('title')
-            draft['category_id'] = category if title == row['title'] else infer_category(title, row['profession'])
+            draft['category_id'] = category if title == row['title'] else active_category_id(connection, infer_category(title, row['profession']))
         connection.execute('UPDATE services SET category_id=?,draft=? WHERE id=?',
                            (category, json.dumps(draft, ensure_ascii=False) if draft is not None else None, row['id']))
     connection.execute("INSERT INTO seed_meta(name,value) VALUES('service_categories_backfill','1')")
 
 
-def category_groups(connection, available=None):
-    rows = connection.execute('SELECT id,name,parent_id FROM service_categories ORDER BY parent_id IS NOT NULL, rowid')
+def category_groups(connection, available=None, *, include_empty=False):
+    rows = connection.execute('''SELECT id,name,parent_id FROM service_categories WHERE archived=0
+        ORDER BY parent_id IS NOT NULL, rowid''')
     groups = {}
     for row in rows:
         ident, name, parent = row
@@ -168,4 +181,49 @@ def category_groups(connection, available=None):
             groups[ident] = dict(id=ident, name=name, categories=[])
         elif available is None or ident in available:
             groups[parent]['categories'].append(dict(id=ident, name=name))
-    return [group for group in groups.values() if group['categories']]
+    return [group for group in groups.values() if include_empty or group['categories']]
+
+
+def active_category_id(connection, ident):
+    if ident:
+        row = connection.execute('''SELECT CASE WHEN archived=0 THEN id ELSE replacement_id END
+            FROM service_categories WHERE id=? AND parent_id IS NOT NULL''', (ident,)).fetchone()
+        if row:
+            return row[0]
+    return None
+
+
+LEGACY_PROFILE_GROUPS = {
+    'Дом и ремонт': ('home-repair', 'Дом и ремонт'),
+    'Красота': ('beauty', 'Красота и уход'),
+    'Обучение': ('education', 'Образование и репетиторство'),
+    'Здоровье': ('wellness', 'Здоровье и восстановление'),
+    'Мероприятия': ('events', 'Организация мероприятий'),
+}
+
+
+def profile_group(connection, value):
+    if not isinstance(value, str):
+        return None
+    row = connection.execute('''SELECT id FROM service_categories
+        WHERE archived=0 AND parent_id IS NULL AND (name=? OR id=?)''', (value, value)).fetchone()
+    if row:
+        return row['id']
+    if value in LEGACY_PROFILE_GROUPS:
+        ident, original = LEGACY_PROFILE_GROUPS[value]
+        row = connection.execute('''SELECT id FROM service_categories
+            WHERE archived=0 AND parent_id IS NULL AND id=? AND name=?''', (ident, original)).fetchone()
+        if row:
+            return row['id']
+    return None
+
+
+def backfill_profile_groups(connection):
+    if connection.execute("SELECT 1 FROM seed_meta WHERE name='profile_groups_backfill'").fetchone():
+        return
+    for table in ('specialists', 'specialist_applications'):
+        for row in connection.execute(f'SELECT id,category FROM {table}').fetchall():
+            group = profile_group(connection, row['category'])
+            if group:
+                connection.execute(f'UPDATE {table} SET category_group_id=? WHERE id=?', (group, row['id']))
+    connection.execute("INSERT INTO seed_meta(name,value) VALUES('profile_groups_backfill','1')")

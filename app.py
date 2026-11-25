@@ -17,7 +17,9 @@ from backend.bookings.service import BookingError, available_slots, create_booki
 from backend.bookings.lifecycle import (CUSTOMER_ROLES, booking_interval, booking_policy, cancellation_reason,
                                store_transition, transition_booking, upcoming_master_bookings)
 from backend.auth.password_recovery import send_recovery_email
-from backend.database.service_categories import category_groups
+from backend.database.category_management import admin_directory, remove_category, save_category
+from backend.database.service_categories import active_category_id, category_groups
+from backend.support import STATUSES, create_support, support_items, update_support
 from backend.moderation.services import (ModerationError, PUBLIC_SERVICE, decide_service, manage_service,
                                 service_details, service_fields)
 from backend.moderation.specialists import decide_application, latest_application, submit_application
@@ -25,7 +27,6 @@ from backend.moderation.specialists import decide_application, latest_applicatio
 load_dotenv()
 
 TZ = ZoneInfo('Europe/Kirov')
-PROFILE_CATEGORIES = ['Дом и ремонт', 'Красота', 'Обучение', 'Здоровье', 'Мероприятия']
 
 
 def now():
@@ -217,16 +218,24 @@ def create_app(test_config=None):
             for row in c.execute(f'''SELECT v.id,v.specialist_id,v.title,v.price,v.duration,v.mode,v.active,
                     v.category_id,k.parent_id AS category_group_id
                 FROM services v JOIN specialists p ON p.id=v.specialist_id
-                LEFT JOIN service_categories k ON k.id=v.category_id
+                LEFT JOIN service_categories k ON k.id=v.category_id AND k.archived=0
                 WHERE {PUBLIC_SERVICE} ORDER BY v.id'''):
                 services.setdefault(row['specialist_id'], []).append(dict(row))
                 if row['category_id'] is not None:
                     available.add(row['category_id'])
             categories = category_groups(c, available)
 
+            category_labels = {item['id']: item['name'] for group in categories for item in group['categories']}
+            for entries in services.values():
+                for service in entries:
+                    service['category_name'] = category_labels.get(service['category_id'])
+
+            group_labels = {row['id']: row['name'] for row in c.execute(
+                'SELECT id,name FROM service_categories WHERE parent_id IS NULL AND archived=0')}
             specialists = []
             for row in c.execute('SELECT * FROM specialists WHERE active=1 ORDER BY id'):
                 s = dict(row)
+                s['category_label'] = group_labels.get(s['category_group_id'], s['category'])
                 s['services'] = services.get(s['id'], [])
                 if category_id and not any(category_id in (v['category_id'], v['category_group_id'])
                                            for v in s['services']):
@@ -289,7 +298,7 @@ def create_app(test_config=None):
     def notifications(user):
         with db() as c:
             rows = c.execute(
-                'SELECT id,booking_id,service_id,specialist_application_id,event,message,created_at,is_read FROM notifications WHERE user_id=? ORDER BY id DESC',
+                'SELECT id,booking_id,service_id,specialist_application_id,support_request_id,event,message,created_at,is_read FROM notifications WHERE user_id=? ORDER BY id DESC',
                 (user['id'],)).fetchall()
         return jsonify(notifications=[{**dict(row), 'is_read': bool(row['is_read'])} for row in rows])
 
@@ -320,7 +329,12 @@ def create_app(test_config=None):
         return jsonify(message=notice['message'], target=target)
 
     def notification_target(c, notice, user):
-        if notice['booking_id'] is not None:
+        if notice['support_request_id'] is not None:
+            items = support_items(c, user, notice['support_request_id'])
+            if items:
+                return dict(kind='support', mode='master' if user['role'] == 'master' else 'client',
+                            tab='support', item=items[0])
+        elif notice['booking_id'] is not None:
             row = c.execute("""SELECT b.id,b.user_id,b.status,b.cancel_reason,s.starts_at,s.booking_mode,
                 v.title,p.name specialist FROM bookings b JOIN slots s ON s.id=b.slot_id
                 JOIN services v ON v.id=s.service_id JOIN specialists p ON p.id=s.specialist_id
@@ -363,9 +377,12 @@ def create_app(test_config=None):
                 JOIN specialists p ON p.id=s.specialist_id JOIN users u ON u.id=b.user_id WHERE {where} ORDER BY s.starts_at DESC''', params).fetchall()
             searches = c.execute('SELECT * FROM searches WHERE user_id=? ORDER BY id DESC LIMIT 30', (user['id'],)).fetchall()
             reviews = c.execute('SELECT r.*,p.name specialist,u.name author FROM reviews r JOIN specialists p ON p.id=r.specialist_id JOIN users u ON u.id=r.user_id ' + ('' if user['role'] == 'admin' else 'WHERE r.user_id=? ') + 'ORDER BY r.id DESC', () if user['role'] == 'admin' else (user['id'],)).fetchall()
+            profile_groups = ([dict(row) for row in c.execute('''SELECT id,name FROM service_categories
+                WHERE parent_id IS NULL AND archived=0 ORDER BY name,id''')] if client_view else [])
             pending = {}
             if role == 'admin':
                 pending = {
+                    'support': c.execute("SELECT count(*) FROM support_requests WHERE status='pending'").fetchone()[0],
                     'service-applications': c.execute("""SELECT count(*) FROM services
                         WHERE deleted=0 AND COALESCE(draft_status,moderation_status)='pending'""").fetchone()[0],
                     'specialist-applications': c.execute("""SELECT count(*) FROM specialist_applications
@@ -375,7 +392,7 @@ def create_app(test_config=None):
         reviewed_ids = {r['booking_id'] for r in reviews}
         rows = [{**dict(b), **booking_policy(b, user, current_time, b['id'] in reviewed_ids)} for b in bookings]
         return jsonify(bookings=rows, pending=pending, searches=[dict(r) for r in searches], reviews=[dict(r) for r in reviews],
-                       specialist_application=application, specialist_categories=PROFILE_CATEGORIES if client_view else [],
+                       specialist_application=application, specialist_categories=profile_groups,
                        user={key: user[key] for key in ('id', 'name', 'email', 'role', 'specialist_id')},
                        server_now=current_time.isoformat(timespec='seconds'))
 
@@ -474,14 +491,15 @@ def create_app(test_config=None):
             return jsonify(reply='Это может быть экстренная ситуация. При непосредственной опасности звоните 112. Обычная запись к специалисту не заменяет экстренную помощь.', specialist_id=None)
         for words, seed_id, category_ids, reply in rules:
             if any(w in message for w in words):
-                placeholders = ','.join('?' for _ in category_ids)
                 with db() as c:
+                    resolved_ids = tuple(active_category_id(c, ident) for ident in category_ids)
+                    placeholders = ','.join('?' for _ in resolved_ids)
                     match = c.execute(f'''SELECT p.id AS specialist_id,v.id AS service_id,e.seed_key
                         FROM services v JOIN specialists p ON p.id=v.specialist_id
                         LEFT JOIN seed_entities e ON e.entity_id=p.id AND e.seed_key=?
                         WHERE v.category_id IN ({placeholders}) AND {PUBLIC_SERVICE}
                         ORDER BY e.seed_key IS NULL, v.id LIMIT 1''',
-                                      (f'specialist:{seed_id}', *category_ids)).fetchone()
+                                      (f'specialist:{seed_id}', *resolved_ids)).fetchone()
                 if match:
                     if match['seed_key'] is None:
                         reply = 'В каталоге есть специалист с подходящей услугой.'
@@ -493,6 +511,7 @@ def create_app(test_config=None):
     @auth('master')
     def master(user):
         with db() as c:
+            c.execute('BEGIN')
             services = c.execute('''SELECT v.*, (SELECT count(*) FROM bookings b JOIN slots s ON s.id=b.slot_id
                 WHERE s.service_id=v.id AND b.status='confirmed' AND s.starts_at>?) upcoming_count
                 FROM services v WHERE v.specialist_id=? AND v.deleted=0''',
@@ -526,6 +545,7 @@ def create_app(test_config=None):
     def add_service(user):
         try:
             with db() as c:
+                c.execute('BEGIN IMMEDIATE')
                 fields = service_fields(c, request.get_json())
                 if not c.execute('SELECT 1 FROM specialists WHERE id=?', (user['specialist_id'],)).fetchone():
                     return fail('Профиль специалиста не найден', 404)
@@ -595,6 +615,69 @@ def create_app(test_config=None):
             c.execute('UPDATE slots SET active=0 WHERE id=?', (ident,))
         return jsonify(ok=True)
 
+    @app.get('/api/support')
+    @app.get('/api/support/<int:ident>')
+    @auth('client', 'master', 'admin')
+    def support(user, ident=None):
+        status = request.args.get('status', 'all')
+        order = request.args.get('order', 'newest')
+        if status not in (*STATUSES, 'all') or order not in ('newest', 'oldest'):
+            return fail('Некорректный фильтр или порядок сортировки')
+        if ident is not None and not 1 <= ident < 2**63:
+            return fail('Обращение не найдено', 404)
+        with db() as c:
+            items = support_items(c, user, ident, status, order)
+        if ident is not None:
+            return jsonify(item=items[0]) if items else fail('Обращение не найдено', 404)
+        return jsonify(items=items)
+
+    @app.post('/api/support')
+    @auth('client', 'master')
+    def send_support(user):
+        try:
+            with db() as c:
+                ident, created = create_support(c, user, request.get_json(), now)
+        except ModerationError as error:
+            return fail(str(error), error.status)
+        return jsonify(id=ident), 201 if created else 200
+
+    @app.post('/api/support/<int:ident>/<action>')
+    @auth('client', 'master', 'admin')
+    def change_support(user, ident, action):
+        if not 1 <= ident < 2**63 or action not in ('cancel', 'resolve'):
+            return fail('Обращение не найдено', 404)
+        if (user['role'] == 'admin') != (action == 'resolve'):
+            return fail('Недостаточно прав', 403)
+        try:
+            with db() as c:
+                update_support(c, user, ident, action, request.get_json(), now)
+        except ModerationError as error:
+            return fail(str(error), error.status)
+        return jsonify(ok=True)
+
+    @app.get('/api/admin/categories')
+    @auth('admin')
+    def list_categories(user):
+        with db() as c:
+            c.execute('BEGIN')
+            return jsonify(groups=admin_directory(c))
+
+    @app.post('/api/admin/categories')
+    @app.post('/api/admin/categories/<ident>/<action>')
+    @auth('admin')
+    def change_category(user, ident=None, action='create'):
+        if action not in ('create', 'edit', 'delete') or (action == 'create') != (ident is None):
+            return fail('Действие не найдено', 404)
+        try:
+            with db() as c:
+                if action == 'delete':
+                    remove_category(c, ident, request.get_json())
+                else:
+                    ident = save_category(c, request.get_json(), ident)
+        except ModerationError as error:
+            return fail(str(error), error.status)
+        return jsonify(id=ident), 201 if action == 'create' else 200
+
     @app.get('/api/admin')
     @auth('admin')
     def admin(user):
@@ -607,7 +690,7 @@ def create_app(test_config=None):
     def apply_for_specialist(user):
         try:
             with db() as c:
-                application = submit_application(c, user['id'], request.get_json(), PROFILE_CATEGORIES, now)
+                application = submit_application(c, user['id'], request.get_json(), now)
         except ModerationError as error:
             return fail(str(error), error.status)
         return jsonify(application=application), 201
