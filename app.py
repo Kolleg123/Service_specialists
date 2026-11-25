@@ -12,14 +12,14 @@ from zoneinfo import ZoneInfo
 from dotenv import load_dotenv
 from flask import Flask, jsonify, request, session, send_from_directory
 from werkzeug.security import generate_password_hash, check_password_hash
-from booking_schedule import save_schedule, schedule_for
-from booking_service import BookingError, available_slots, create_booking
-from booking_lifecycle import (CUSTOMER_ROLES, booking_interval, booking_policy, cancellation_reason,
+from backend.bookings.schedule import save_schedule, schedule_for
+from backend.bookings.service import BookingError, available_slots, create_booking
+from backend.bookings.lifecycle import (CUSTOMER_ROLES, booking_interval, booking_policy, cancellation_reason,
                                store_transition, transition_booking, upcoming_master_bookings)
-from password_recovery import send_recovery_email
-from service_moderation import (ModerationError, PUBLIC_SERVICE, decide_service, manage_service,
+from backend.auth.password_recovery import send_recovery_email
+from backend.moderation.services import (ModerationError, PUBLIC_SERVICE, decide_service, manage_service,
                                 service_details, service_fields)
-from specialist_registration import decide_application, latest_application, submit_application
+from backend.moderation.specialists import decide_application, latest_application, submit_application
 
 load_dotenv()
 
@@ -658,7 +658,7 @@ def create_app(test_config=None):
 
 
 def init_db(app, db):
-    from seed_data import initialize_database
+    from backend.database.seed_data import initialize_database
     with db() as connection:
         initialize_database(connection, now())
 

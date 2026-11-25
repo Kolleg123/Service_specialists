@@ -41,9 +41,7 @@ jobs:
           npx playwright install --with-deps chromium
 
       - name: Check JS syntax
-        run: |
-          node --check static/app.js
-          node --check static/booking.js
+        run: npm run check
 
       - name: Run Playwright E2E tests
         run: npm run test:e2e

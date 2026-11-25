@@ -126,7 +126,7 @@ def test_generated_booking_cannot_use_unpublished_service(app):
 
 
 def test_upgrade_preserves_published_services_manual_slots_and_read_notifications(tmp_path):
-    from seed_data import SCHEMA
+    from backend.database.seed_data import SCHEMA
 
     database = tmp_path / 'old.sqlite'
     starts_at = (now() + timedelta(days=2)).replace(hour=10, minute=0).isoformat(timespec='minutes')

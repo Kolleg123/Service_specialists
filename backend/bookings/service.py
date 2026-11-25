@@ -2,9 +2,9 @@
 from collections import Counter
 from datetime import date, datetime, time, timedelta
 
-from booking_notifications import notify_booking
-from booking_schedule import BOOKING_WINDOW_DAYS, schedule_for, schedule_windows
-from service_moderation import PUBLIC_SERVICE
+from backend.bookings.notifications import notify_booking
+from backend.bookings.schedule import BOOKING_WINDOW_DAYS, schedule_for, schedule_windows
+from backend.moderation.services import PUBLIC_SERVICE
 
 
 class BookingError(Exception):

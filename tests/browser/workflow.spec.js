@@ -26,10 +26,10 @@ test('booking, cancellation, review, moderation, schedule and consultation', asy
   await page.getByRole('button', { name: 'Подтвердить запись' }).click();
   await expect(page.locator('.booking-row .confirmed')).toHaveCount(1);
   await page.getByRole('button', { name: 'Отменить запись', exact: true }).click();
-  await page.getByRole('button', { name: 'Оставить запись', exact: true }).click();
+  await page.getByRole('button', { name: 'Назад', exact: true }).click();
   await expect(page.locator('.booking-row .confirmed')).toHaveCount(1);
   await page.getByRole('button', { name: 'Отменить запись', exact: true }).click();
-  await page.getByRole('button', { name: 'Да, отменить' }).click();
+  await page.getByRole('button', { name: 'Да, подтвердить' }).click();
   await expect(page.locator('.booking-row .cancelled')).toHaveCount(1);
   const bell = page.getByRole('button', { name: /^Уведомления/ });
   const inbox = page.locator('#notifications-panel');
@@ -55,7 +55,10 @@ test('booking, cancellation, review, moderation, schedule and consultation', asy
   await login(page, 'Администратор');
   await page.getByRole('button', { name: 'Модерация отзывов' }).click();
   await page.getByRole('button', { name: 'Опубликовать', exact: true }).first().click();
-  await expect(page.getByRole('button', { name: 'Опубликовать', exact: true }).first()).toBeDisabled();
+  await expect(page.getByText('Очень внимательный мастер. Всё исправил быстро и аккуратно.')).toHaveCount(0);
+  await page.getByLabel('Статус отзыва').selectOption('approved');
+  const publishedReview = page.locator('.review').filter({ hasText: 'Очень внимательный мастер. Всё исправил быстро и аккуратно.' });
+  await expect(publishedReview.getByRole('button', { name: 'Опубликовать', exact: true })).toBeDisabled();
   await page.getByRole('button', { name: 'Специалисты и услуги' }).click();
   await expect(page.locator('.admin-person')).toHaveCount(6);
   await page.locator('.admin-person').first().getByRole('button', { name: 'Скрыть', exact: true }).click();

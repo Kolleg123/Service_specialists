@@ -8,7 +8,7 @@ import sqlite3
 
 import app as app_module
 from app import create_app
-from seed_data import initialize_database
+from backend.database.seed_data import initialize_database
 from tests.test_app import client, post
 
 
@@ -153,7 +153,7 @@ def test_seed_initialization_survives_real_app_recreation_and_preserves_edits(tm
 
 
 def test_failed_seed_resume_rolls_back_to_existing_snapshot(tmp_path, monkeypatch):
-    import seed_data
+    import backend.database.seed_data as seed_data
 
     path = tmp_path / "resume-rollback.sqlite"
     with sqlite3.connect(path) as connection:

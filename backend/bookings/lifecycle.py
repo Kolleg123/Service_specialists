@@ -1,8 +1,8 @@
 """Shared server-side state, action permissions and atomic booking transitions."""
 from datetime import timedelta
 
-from booking_notifications import notify_booking
-from booking_service import BookingError, parse_start
+from backend.bookings.notifications import notify_booking
+from backend.bookings.service import BookingError, parse_start
 
 
 CUSTOMER_ROLES = ('client', 'master')

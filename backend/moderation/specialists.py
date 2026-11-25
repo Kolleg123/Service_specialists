@@ -1,5 +1,5 @@
 """Applications for a professional profile, separate from service moderation."""
-from service_moderation import ModerationError
+from backend.moderation.services import ModerationError
 
 
 TEXT_FIELDS = {

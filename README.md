@@ -74,11 +74,15 @@ SQLite хранится в `instance/svobodno.sqlite`. Приложение со
 
 | Файлы | Назначение |
 |---|---|
-| `app.py`, `seed_data.py` | Flask API, авторизация, инициализация SQLite и демо-данных |
-| `booking_service.py`, `booking_schedule.py`, `booking_lifecycle.py`, `booking_notifications.py` | Доступность, расписание, управление записями и уведомления о встречах |
-| `specialist_registration.py`, `service_moderation.py`, `password_recovery.py` | Заявки специалистов, модерация услуг, отправка писем восстановления |
-| `static/` | HTML, стили, JavaScript и ресурсы сайта |
-| `tests/`, `scripts/e2e_server.py` | Тесты API и браузерные сценарии с отдельной базой |
+| `app.py` | Точка запуска, настройки Flask и маршруты API |
+| `backend/bookings/` | Бронирование, расписание, статусы и уведомления о встречах |
+| `backend/moderation/` | Модерация услуг и заявки на статус специалиста |
+| `backend/auth/` | Отправка писем для восстановления пароля |
+| `backend/database/` | Схема SQLite, обновление базы и демо-данные |
+| `static/index.html`, `static/js/`, `static/css/` | Страница сайта, сценарии интерфейса и стили |
+| `static/photos/`, `static/fonts/` | Фотографии и шрифты |
+| `tests/`, `tests/browser/` | Серверные и браузерные тесты |
+| `scripts/` | Запуск отдельного сервера для браузерных тестов и загрузка демо-фото |
 | `docs/`, `instance/` | Документация и локальные данные. `instance/` исключена из Git |
 
 ## Как проверить заявки

@@ -4,7 +4,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 from app import create_app
-from seed_data import initialize_database, SCHEMA, PEOPLE
+from backend.database.seed_data import initialize_database, SCHEMA, PEOPLE
 from tests.test_app import post
 
 
@@ -83,7 +83,7 @@ def test_resume_manifest_with_missing_rows_preserves_real_booking(tmp_path):
 
 
 def test_failure_rolls_back_and_next_start_repairs(tmp_path, monkeypatch):
-    import seed_data
+    import backend.database.seed_data as seed_data
     path = tmp_path / 'interrupted.sqlite'
     original = seed_data.ensure
     def interrupted(connection, key, *args, **kwargs):

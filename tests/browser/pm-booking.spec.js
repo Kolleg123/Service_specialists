@@ -61,7 +61,7 @@ async function chooseLesson(page, mode) {
   const booking = page.locator('.booking-row').filter({ hasText: 'Английский индивидуально' })
     .filter({ has: page.getByRole('button', { name: 'Отменить запись', exact: true }) });
   await booking.getByRole('button', { name: 'Отменить запись', exact: true }).click();
-  await page.getByRole('button', { name: 'Да, отменить' }).click();
+  await page.getByRole('button', { name: 'Да, подтвердить' }).click();
   await expect(page.locator('#toast')).toContainText('Запись отменена');
   await logout(page);
 }
