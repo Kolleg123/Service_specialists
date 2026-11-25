@@ -1,4 +1,5 @@
 """Applications for a professional profile, separate from service moderation."""
+from backend.database.service_categories import profile_group
 from backend.moderation.services import ModerationError
 
 
@@ -10,10 +11,10 @@ TEXT_FIELDS = {
     'bio': ('Информация о себе', 2, 1500),
     'location': ('Место оказания услуг', 2, 250),
 }
-PROFILE_FIELDS = (*TEXT_FIELDS, 'category', 'experience')
+PROFILE_FIELDS = (*TEXT_FIELDS, 'category', 'experience', 'category_group_id')
 
 
-def submit_application(connection, user_id, data, categories, clock):
+def submit_application(connection, user_id, data, clock):
     values = {}
     for key, (label, minimum, maximum) in TEXT_FIELDS.items():
         value = data.get(key)
@@ -21,13 +22,15 @@ def submit_application(connection, user_id, data, categories, clock):
             raise ModerationError(f'{label}: укажите от {minimum} до {maximum} символов')
         values[key] = value.strip()
     category, experience = data.get('category'), data.get('experience')
-    if category not in categories:
-        raise ModerationError('Выберите категорию из каталога')
     if type(experience) is not int or not 0 <= experience <= 80:
         raise ModerationError('Укажите стаж от 0 до 80 полных лет')
-    values.update(category=category, experience=experience)
-
     connection.execute('BEGIN IMMEDIATE')
+    group = profile_group(connection, category)
+    if not group:
+        raise ModerationError('Выберите категорию из каталога')
+    label = connection.execute('SELECT name FROM service_categories WHERE id=?', (group,)).fetchone()[0]
+    values.update(category=label if category == group else category, experience=experience, category_group_id=group)
+
     user = connection.execute('SELECT role,specialist_id FROM users WHERE id=?', (user_id,)).fetchone()
     if not user or user['role'] != 'client' or user['specialist_id'] is not None:
         raise ModerationError('Заявку может подать клиент без профиля специалиста', 403)
@@ -36,8 +39,8 @@ def submit_application(connection, user_id, data, categories, clock):
         raise ModerationError('У вас уже есть заявка на рассмотрении', 409)
 
     connection.execute('''INSERT INTO specialist_applications
-        (user_id,name,profession,education,skills,bio,location,category,experience,created_at)
-        VALUES(?,?,?,?,?,?,?,?,?,?)''',
+        (user_id,name,profession,education,skills,bio,location,category,experience,category_group_id,created_at)
+        VALUES(?,?,?,?,?,?,?,?,?,?,?)''',
         (user_id, *(values[key] for key in PROFILE_FIELDS), clock().isoformat(timespec='seconds')))
     return latest_application(connection, user_id)
 
@@ -72,8 +75,8 @@ def decide_application(connection, application_id, data, clock):
         if application['role'] != 'client' or application['specialist_id'] is not None:
             raise ModerationError('Учётная запись уже имеет профиль или другую роль', 409)
         specialist_id = connection.execute('''INSERT INTO specialists
-            (name,profession,education,skills,bio,location,category,experience,photo)
-            VALUES(?,?,?,?,?,?,?,?,?)''',
+            (name,profession,education,skills,bio,location,category,experience,category_group_id,photo)
+            VALUES(?,?,?,?,?,?,?,?,?,?)''',
             (*(application[key] for key in PROFILE_FIELDS), '/static/favicon.svg')).lastrowid
         connection.execute("UPDATE users SET role='master',specialist_id=? WHERE id=?", (specialist_id, user_id))
         message = 'Заявка одобрена. В личном кабинете доступен режим «Специалист».'

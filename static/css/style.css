@@ -180,3 +180,19 @@ footer .logo svg{width:27px;height:27px}
  .notification-trigger{font-size:10px}
  dialog h2{font-size:24px}
 }
+
+.support-filters {display:flex; flex-wrap:wrap; gap:0 16px}
+.support-filters .field {flex:1 1 200px; max-width:320px}
+.support-row, .directory-group {overflow-wrap:anywhere}
+.support-row summary, .directory-group summary {cursor:pointer}
+.support-meta, .directory-group summary .muted {display:block; margin-top:5px}
+.support-text {white-space:pre-wrap; overflow-wrap:anywhere}
+.support-row .dialog-actions, .directory-group .dialog-actions, #support-dialog .dialog-actions {flex-wrap:wrap}
+.support-row [data-category-jump] {display:block; margin:8px 0}
+.directory-category p {margin:4px 0}
+.directory-delete {color:#963d42}
+button.directory-delete:not(.outline):not(.text-button) {background:#963d42; color:white}
+@media (max-width:560px) {
+ .directory-category {flex-wrap:wrap}
+ .support-filters .field {max-width:none}
+}

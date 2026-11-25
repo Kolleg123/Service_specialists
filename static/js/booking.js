@@ -72,6 +72,7 @@ class BookingFlow {
   constructor(specialist, preferredServiceId) {
     this.specialist = specialist;
     const preferred = specialist.services.find(service => service.id === preferredServiceId);
+    this.categoryLabels = specialist;
     this.serviceId = (preferred ?? specialist.services[0])?.id ?? null;
     this.step = 1;
     this.slots = [];
@@ -96,9 +97,10 @@ class BookingFlow {
   open() {
     const s = this.specialist;
     modal(`<section id="booking-flow" aria-label="Запись к специалисту">
-      <div class="profile-head"><img src="${esc(s.photo)}" alt="${esc(s.name)}"><div><span class="eyebrow">${esc(s.profession)}</span><h2>${esc(s.name)}</h2><p>${s.experience} лет опыта · ${reviewCount(s.reviews.length)}</p><p>${esc(s.location)}</p></div></div>
+      <div class="profile-head"><img src="${esc(s.photo)}" alt="${esc(s.name)}"><div><span class="eyebrow">${esc(s.profession)}</span><h2>${esc(s.name)}</h2><p>${s.experience} лет опыта · ${reviewCount(s.reviews.length)}</p><p>${esc(s.location)}</p><p data-profile-category></p></div></div>
       <nav class="booking-steps" aria-label="Этапы записи"></nav>
       <label class="field">Услуга<select id="booking-service">${s.services.map(v => `<option value="${v.id}">${esc(v.title)} · ${money(v.price)} · ${v.duration} мин</option>`).join('')}</select></label>
+      <p class="muted" data-profile-service-category></p>
       <p class="timezone-note">Время Кирова · UTC+3. Оплата после встречи.</p>
       <div id="booking-notice" role="status" aria-live="polite"></div>
       <div id="step-content"></div>
@@ -106,14 +108,27 @@ class BookingFlow {
     if (this.serviceId !== null) $('#booking-service').value = String(this.serviceId);
     $('#booking-service').onchange = e => {
       this.serviceId = Number(e.target.value);
+      this.renderCategoryLabels();
       this.resetChoice('Услуга изменена. Прежние дата и время сброшены — выберите новый слот.');
       this.step = this.ownProfile ? 1 : 2;
       this.fields.quantity = 1;
       if (this.ownProfile) this.render();
       else this.refresh();
     };
+    this.renderCategoryLabels();
     this.render();
     $('#booking-service').focus();
+  }
+
+  updateCategoryLabels(specialists) {
+    this.categoryLabels = specialists.find(specialist => specialist.id === this.specialist.id);
+    this.renderCategoryLabels();
+  }
+
+  renderCategoryLabels() {
+    $('[data-profile-category]').textContent = this.categoryLabels?.category_label ?? '';
+    const service = this.categoryLabels?.services.find(item => item.id === this.serviceId);
+    $('[data-profile-service-category]').textContent = service?.category_name ?? '';
   }
 
   resetChoice(message = '') {

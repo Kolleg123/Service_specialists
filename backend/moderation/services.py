@@ -20,7 +20,7 @@ def service_fields(connection, data):
             or mode not in ('Выезд', 'У специалиста', 'Онлайн', 'Группа')):
         raise ModerationError('Проверьте название, формат, стоимость и длительность (15–480 минут)')
     if not isinstance(category_id, str) or not category_id.isascii() or not connection.execute(
-            'SELECT 1 FROM service_categories WHERE id=? AND parent_id IS NOT NULL', (category_id,)
+            'SELECT 1 FROM service_categories WHERE id=? AND parent_id IS NOT NULL AND archived=0', (category_id,)
     ).fetchone():
         raise ModerationError('Выберите категорию услуги из справочника')
     return dict(zip(FIELDS, (title.strip(), price, duration, mode, category_id)))

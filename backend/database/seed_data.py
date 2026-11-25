@@ -2,7 +2,10 @@
 from datetime import datetime, timedelta
 from werkzeug.security import generate_password_hash
 
-from backend.database.service_categories import backfill_categories, infer_category, initialize_categories
+from backend.support import initialize_support
+
+from backend.database.service_categories import (active_category_id, backfill_categories, backfill_profile_groups,
+                                                infer_category, initialize_categories, profile_group)
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS specialists(id INTEGER PRIMARY KEY,name TEXT,profession TEXT,category TEXT,experience INTEGER,education TEXT,skills TEXT,bio TEXT,photo TEXT,location TEXT,active INTEGER DEFAULT 1);
@@ -61,22 +64,27 @@ CREATE TABLE notifications(
     booking_id INTEGER REFERENCES bookings(id) ON DELETE CASCADE,
     service_id INTEGER REFERENCES services(id) ON DELETE CASCADE,
     specialist_application_id INTEGER REFERENCES specialist_applications(id) ON DELETE CASCADE,
+    support_request_id INTEGER REFERENCES support_requests(id),
     event TEXT NOT NULL,
     message TEXT NOT NULL,
     created_at TEXT NOT NULL,
     is_read INTEGER NOT NULL DEFAULT 0 CHECK(is_read IN (0,1)),
     CHECK(
         (booking_id IS NOT NULL AND service_id IS NULL AND specialist_application_id IS NULL
-            AND event IN ('confirmed','cancelled','completed'))
+            AND support_request_id IS NULL AND event IN ('confirmed','cancelled','completed'))
         OR
         (booking_id IS NULL AND service_id IS NOT NULL AND specialist_application_id IS NULL
-            AND event IN ('service_approved','service_rejected'))
+            AND support_request_id IS NULL AND event IN ('service_approved','service_rejected'))
         OR
         (booking_id IS NULL AND service_id IS NULL AND specialist_application_id IS NOT NULL
-            AND event IN ('specialist_approved','specialist_rejected'))
+            AND support_request_id IS NULL AND event IN ('specialist_approved','specialist_rejected'))
+        OR
+        (booking_id IS NULL AND service_id IS NULL AND specialist_application_id IS NULL
+            AND support_request_id IS NOT NULL AND event IN ('support_created','support_resolved'))
     ),
     UNIQUE(user_id,booking_id,event),
-    UNIQUE(user_id,specialist_application_id)
+    UNIQUE(user_id,specialist_application_id),
+    UNIQUE(user_id,support_request_id,event)
 )
 """
 
@@ -106,12 +114,12 @@ def migrate_service_moderation(connection):
 def migrate_notifications(connection):
     columns = {row['name'] for row in connection.execute('PRAGMA table_info(notifications)')}
     schema = connection.execute("SELECT sql FROM sqlite_master WHERE name='notifications'").fetchone()
-    if columns and ('specialist_application_id' not in columns or
+    if columns and ('support_request_id' not in columns or 'specialist_application_id' not in columns or
                     'UNIQUE(user_id,service_id)' in schema['sql']):
         connection.execute('ALTER TABLE notifications RENAME TO previous_notifications')
         connection.execute(NOTIFICATIONS_TABLE)
         fields = 'id,user_id,booking_id,event,message,created_at,is_read'
-        for field in ('service_id', 'specialist_application_id'):
+        for field in ('service_id', 'specialist_application_id', 'support_request_id'):
             if field in columns:
                 fields += ',' + field
         connection.execute(f"INSERT INTO notifications({fields}) SELECT {fields} FROM previous_notifications")
@@ -230,13 +238,15 @@ def initialize_database(connection, current_time):
     if 'ends_at' not in slot_columns:
         connection.execute('ALTER TABLE slots ADD COLUMN ends_at TEXT')
     migrate_service_moderation(connection)
+    initialize_support(connection)
     migrate_notifications(connection)
     initialize_categories(connection)
     specialist_ids = {}
     for index, person in enumerate(PEOPLE, 1):
         keys = ['name','profession','category','experience','education','skills','bio']
         values = dict(zip(keys, person[:7]))
-        values.update(photo=f'/static/photos/{index}.jpg', location=person[8])
+        values.update(photo=f'/static/photos/{index}.jpg', location=person[8],
+                      category_group_id=profile_group(connection, person[2]))
         specialist_ids[index] = ensure(connection, f'specialist:{index}', 'specialists',
                                        {'name': person[0], 'profession': person[1]}, values, index)
 
@@ -253,11 +263,13 @@ def initialize_database(connection, current_time):
     service_ids = {}
     for index, (specialist, title, price, duration, mode) in enumerate(SERVICES, 1):
         values = dict(specialist_id=specialist_ids[specialist], title=title, price=price, duration=duration,
-                      mode=mode, category_id=infer_category(title, PEOPLE[specialist - 1][1]))
+                      mode=mode, category_id=active_category_id(
+                          connection, infer_category(title, PEOPLE[specialist - 1][1])))
         service_ids[index] = ensure(connection, f'service:{index}', 'services',
                                     {'specialist_id': values['specialist_id'], 'title': title}, values, index)
 
     backfill_categories(connection)
+    backfill_profile_groups(connection)
 
     anchor_row = connection.execute("SELECT value FROM seed_meta WHERE name='anchor_date'").fetchone()
     if anchor_row:

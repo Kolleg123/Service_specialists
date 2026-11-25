@@ -1,5 +1,9 @@
 function openNotificationDetails({message, target}) {
  const item = target?.item;
+ if (target?.kind === 'support') {
+  openSupportFromNotice(item, state.user.role === 'admin');
+  return;
+ }
  let details = '<p>Связанный объект больше недоступен.</p>';
  if (target?.kind === 'booking') {
   const status = {confirmed:'Подтверждена', cancelled:'Отменена', completed:'Завершена'};
@@ -76,13 +80,14 @@ function serviceFormFields(service = {}) {
 
 function bindServiceForm(form, path, categories, initialCategory, inModal = false) {
  bindServiceCategories(form, categories, initialCategory);
+ $('[data-suggest-category]', form).onclick = () => showSupportForm('Предложение новой категории', form);
  form.onsubmit = async event => {
   event.preventDefault();
   const data = Object.fromEntries(new FormData(form));
   delete data.category_group;
   data.price = Number(data.price);
   data.duration = Number(data.duration);
-  const button = $('button', form);
+  const button = $('button[type=submit]', form);
   button.disabled = true;
   try {
    await api(path, data);
@@ -98,7 +103,19 @@ function bindServiceForm(form, path, categories, initialCategory, inModal = fals
 }
 
 function renderManagedServices(root, services, categories) {
- root.innerHTML = `<h2>Мои услуги</h2><div class="service-list">${services.map(service => `
+ if (!$('#service-form', root)) {
+  root.innerHTML = `<h2>Мои услуги</h2><div class="service-list"></div>
+   <h3>Добавить услугу</h3><form id="service-form" class="panel form-grid">${serviceFormFields()}
+   <button type="submit" class="button">Добавить услугу +</button><p class="form-error" role="alert"></p></form>`;
+  bindServiceForm($('#service-form', root), '/master/services', categories);
+ } else {
+  $('#service-form', root).updateServiceDirectory(categories);
+ }
+ const list = $('.service-list', root);
+ const snapshot = JSON.stringify([services, categories]);
+ if (list.dataset.snapshot === snapshot) return;
+ list.dataset.snapshot = snapshot;
+ list.innerHTML = services.map(service => `
   <article class="panel service-row" data-service-id="${service.id}">
    <div><h3>${esc(service.title)}</h3><p>${esc(service.mode)} · ${service.duration} мин ·
     ${serviceStatus[service.moderation_status]}${service.active ? '' : ' · Скрыта'}</p>
@@ -107,16 +124,13 @@ function renderManagedServices(root, services, categories) {
    ${(service.draft_reason || service.moderation_reason) ? `<p>Причина отклонения: ${esc(service.draft_reason || service.moderation_reason)}</p>` : ''}
    <div class="dialog-actions"><button data-edit-service class="button outline">Изменить</button>
    <button data-delete-service class="button outline">Удалить</button></div></div>
-  </article>`).join('')}</div>
-  <h3>Добавить услугу</h3><form id="service-form" class="panel form-grid">${serviceFormFields()}
-   <button class="button">Добавить услугу +</button><p class="form-error" role="alert"></p></form>`;
- bindServiceForm($('#service-form', root), '/master/services', categories);
+  </article>`).join('');
  for (const service of services) {
   const row = $(`[data-service-id="${service.id}"]`, root);
   $('[data-edit-service]', row).onclick = () => {
    const edited = service.draft ?? service;
    modal(`<h2>Изменить услугу</h2><form id="edit-service-form">${serviceFormFields(edited)}
-    <button class="button">Отправить на проверку</button><p class="form-error" role="alert"></p></form>`);
+    <button type="submit" class="button">Отправить на проверку</button><p class="form-error" role="alert"></p></form>`);
    bindServiceForm($('#edit-service-form'), `/master/services/${service.id}/edit`, categories, edited.category_id, true);
   };
   $('[data-delete-service]', row).onclick = async () => {
