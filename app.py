@@ -310,6 +310,8 @@ def create_app(test_config=None):
                 c.execute('DELETE FROM bookings WHERE slot_id IN (SELECT id FROM slots WHERE specialist_id=?)', (specialist_id,))
                 c.execute('DELETE FROM slots WHERE specialist_id=?', (specialist_id,))
                 c.execute('DELETE FROM services WHERE specialist_id=?', (specialist_id,))
+                c.execute('DELETE FROM notifications WHERE user_id=?', (user['id'],))
+                c.execute('DELETE FROM searches WHERE user_id=?', (user['id'],))
                 c.execute('DELETE FROM password_reset_tokens WHERE user_id=?', (user['id'],))
                 c.execute('DELETE FROM users WHERE id=?', (user['id'],))
                 c.execute('DELETE FROM specialists WHERE id=?', (specialist_id,))
@@ -345,10 +347,10 @@ def create_app(test_config=None):
             c.execute('DELETE FROM slots WHERE specialist_id=?', (ident,))
             c.execute('DELETE FROM services WHERE specialist_id=?', (ident,))
             if master:
+                c.execute('DELETE FROM notifications WHERE user_id=?', (master['id'],))
+                c.execute('DELETE FROM searches WHERE user_id=?', (master['id'],))
                 c.execute('DELETE FROM password_reset_tokens WHERE user_id=?', (master['id'],))
                 c.execute('DELETE FROM users WHERE id=?', (master['id'],))
-        c.execute if False else None
-        with db() as c:
             c.execute('DELETE FROM specialists WHERE id=?', (ident,))
         if master and master['avatar'] and master['avatar'].startswith('/uploads/'):
             avatar_path = Path(app.config['UPLOAD_FOLDER']) / Path(master['avatar']).name
