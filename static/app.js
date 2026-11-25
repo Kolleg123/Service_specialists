@@ -58,7 +58,7 @@ function catalog() {
 }
 function drawCards() {
  let list=state.specialists.filter(s=>(state.category==='Все специалисты'||s.services.some(v=>(v.categories||[]).includes(state.category))) && (!state.query||[s.name,s.profession,s.skills,...s.services.map(v=>v.title)].join(' ').toLowerCase().includes(state.query.toLowerCase())) && s.services.some(v=>(state.category==='Все специалисты'||(v.categories||[]).includes(state.category))&&(!state.mode||v.mode===state.mode)&&(!state.maxPrice||v.price<=Number(state.maxPrice))));
- if(state.sort==='price')list.sort((a,b)=>Math.min(...a.services.map(x=>x.price))-Math.min(...b.services.map(x=>x.price)));
+ if(state.sort==='price'){const minVisiblePrice=s=>Math.min(...s.services.filter(v=>(state.category==='Все специалисты'||(v.categories||[]).includes(state.category))&&(!state.mode||v.mode===state.mode)&&(!state.maxPrice||v.price<=Number(state.maxPrice))).map(v=>v.price));list.sort((a,b)=>minVisiblePrice(a)-minVisiblePrice(b));}
  if(state.sort==='rating')list.sort((a,b)=>(b.rating||0)-(a.rating||0));
  if(state.sort==='experience')list.sort((a,b)=>b.experience-a.experience);
  $('#cards').innerHTML=list.length?list.map(card).join(''):'<div class="empty"><span>⌕</span><h3>Пока никого не нашли</h3><p>Попробуйте другую задачу или сбросьте фильтры.</p></div>';
