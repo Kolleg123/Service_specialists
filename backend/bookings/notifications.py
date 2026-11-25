@@ -10,11 +10,11 @@ MESSAGES = {
 
 
 def notify_booking(connection, booking_id, event, current_time):
-    booking = connection.execute('''SELECT b.user_id,b.cancel_reason,s.specialist_id,s.starts_at,s.booking_mode,v.title
-        FROM bookings b JOIN slots s ON s.id=b.slot_id
+    booking = connection.execute('''SELECT b.user_id,u.role,b.cancel_reason,s.specialist_id,s.starts_at,s.booking_mode,v.title
+        FROM bookings b JOIN users u ON u.id=b.user_id JOIN slots s ON s.id=b.slot_id
         JOIN services v ON v.id=s.service_id WHERE b.id=?''', (booking_id,)).fetchone()
     client_message, master_message = MESSAGES[event]
-    recipients = [(booking['user_id'], client_message)]
+    recipients = [] if booking['role'] == 'deleted' else [(booking['user_id'], client_message)]
     if master_message:
         masters = connection.execute(
             "SELECT id FROM users WHERE role='master' AND specialist_id=?",

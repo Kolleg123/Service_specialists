@@ -15,12 +15,15 @@ let dashboardRefreshTimer;
 let dashboardRequest = 0;
 let catalogRequest = 0;
 const chatLauncher = $('#chat-launch');
-async function api(path, data) {
+async function api(path, data, method = data === undefined ? 'GET' : 'POST') {
+  const multipart = data instanceof FormData;
+  const headers = {'X-CSRF-Token': state.csrf};
+  if (!multipart) headers['Content-Type'] = 'application/json';
+  const body = multipart || data === undefined ? data : JSON.stringify(data);
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 15000);
   try {
-    const response = await fetch('/api' + path, {method:data === undefined ? 'GET':'POST', signal:controller.signal,
-      headers:{'Content-Type':'application/json','X-CSRF-Token':state.csrf}, body:data === undefined ? undefined : JSON.stringify(data)});
+    const response = await fetch('/api' + path, {method, signal:controller.signal, headers, body});
     let result; try { result = await response.json(); } catch { throw new Error('Сервер временно недоступен'); }
     if (!response.ok) { const error = new Error(result.error || 'Не удалось выполнить действие'); error.status = response.status; throw error; }
     return result;
@@ -32,8 +35,35 @@ async function api(path, data) {
 }
 function toast(message) {$('#toast').textContent = message; $('#toast').classList.add('show'); clearTimeout(toast.timer); toast.timer = setTimeout(() => $('#toast').classList.remove('show'), 4500);}
 function modal(html) {$('#modal-content').innerHTML = html; if (!$('#modal').open) $('#modal').showModal();}
-function closeModal() {$('#modal').close();}
-function updateAccount() {$('#account').innerHTML = state.user ? `${esc(state.user.name.split(' ')[0])} <span class="avatar">${esc(state.user.name[0])}</span>` : 'Личный кабинет <span>↗</span>';}
+function closeModal() {
+ if (!$('#modal form[data-pending-deletion]')) $('#modal').close();
+}
+function updateAccount() {
+ const user = state.user;
+ const avatar = user?.avatar ? `<img class="avatar avatar-img" src="${esc(user.avatar)}" alt="">` :
+  `<span class="avatar">${esc(user?.name[0])}</span>`;
+ $('#account').innerHTML = user ? `${esc(user.name.split(' ')[0])} ${avatar}` : 'Личный кабинет <span>↗</span>';
+}
+function endSession({csrf}) {
+ stopNotificationPolling();
+ clearTimeout(dashboardRefreshTimer);
+ state.user = null;
+ state.csrf = csrf;
+ specialistApplicationFilter = 'pending';
+ serviceApplicationFilter = 'pending';
+ Object.assign(supportView, {status:'', order:'newest'});
+ supportView.open.clear();
+ supportView.drafts.clear();
+ Object.assign(directoryView, {query:'', order:'asc'});
+ directoryView.open.clear();
+ Object.assign(adminFilters, defaultAdminFilters);
+ dashboardMode = 'master';
+ dashboardTab = 'bookings';
+ dashboardStatusFilter = 'all';
+ updateAccount();
+ location.hash = 'catalog';
+ catalog();
+}
 async function refreshCatalog() {const data = await api('/catalog'); state.specialists = data.specialists; state.categories = data.categories;}
 function card({specialist: s, service, price, category}) {
  const profileAttributes = `data-profile="${s.id}" data-preferred-service="${service.id}"`;
@@ -387,10 +417,10 @@ async function renderDashboard(background) {
  if (hasSpecialistProfile) dashboardMode=mode;
  const tabs=isClient?[['bookings','Мои записи'],['searches','История поиска'],['reviews','Мои отзывы']]:isMaster?[['bookings','Записи клиентов'],['schedule','Моё расписание'],['services','Мои услуги']]:[['bookings','Все записи'],['moderation','Модерация отзывов'],['service-applications','Заявки на услуги'],['specialist-applications','Заявки специалистов'],['people','Специалисты и услуги']];
  if (isAdmin) tabs.push(['support','Обращения'], ['categories','Категории услуг']);
- else tabs.push(['support','Поддержка']);
+ else tabs.push(['support','Поддержка'], ['profile','Профиль']);
  const application=data.specialist_application;
  if (isClient && (!hasSpecialistProfile || application)) {
-  const label=!application || application.status==='rejected' ? 'Стать специалистом' : 'Статус заявки';
+  const label=!application || application.status==='rejected' || (!hasSpecialistProfile && application.status==='approved') ? 'Стать специалистом' : 'Статус заявки';
   tabs.push(['specialist-application',label]);
  }
  const modeControl=hasSpecialistProfile ? `<label>Режим кабинета <select id="dashboard-mode">
@@ -400,7 +430,7 @@ async function renderDashboard(background) {
  if(!tabs.some(x=>x[0]===dashboardTab))dashboardTab='bookings';
  const notificationControl=`<div class="notification-control"><button id="notifications-toggle" class="button outline notification-trigger" aria-label="Уведомления" aria-expanded="false" aria-controls="notifications-panel"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 9a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9M10 21h4"/></svg><span>Уведомления</span><span class="notification-count hidden" aria-hidden="true"></span></button><div id="notifications-panel" class="notification-panel hidden" aria-label="Список уведомлений"></div></div>`;
  $('#app').innerHTML=`<section class="dashboard"><div class="dashboard-heading"><div><span class="eyebrow">${isClient?'ЛИЧНЫЙ КАБИНЕТ':isMaster?'КАБИНЕТ СПЕЦИАЛИСТА':'АДМИНИСТРИРОВАНИЕ'}</span><h1>Здравствуйте, ${esc(user.name.split(' ')[0])}<span class="wave">✧</span></h1><p class="muted">${isClient?'Встречи, которые делают жизнь проще.':isMaster?'Ваше время, ваши услуги и ваши клиенты.':'Управляйте качеством сервиса и публикациями.'}</p></div><div class="dashboard-actions">${modeControl}${notificationControl}<button id="logout" class="button outline">Выйти ↗</button></div></div><div class="stats"><div><span>${isClient?'Предстоящих встреч':'Активных записей'}</span><strong>${data.bookings.filter(b=>isClient?b.phase==='upcoming':b.status==='confirmed').length}</strong></div><div><span>Завершённых встреч</span><strong>${data.bookings.filter(b=>b.status==='completed').length}</strong></div><div><span>${isAdmin?'На модерации':'Всего записей'}</span><strong>${isAdmin?data.reviews.filter(r=>r.status==='pending').length:data.bookings.length}</strong></div></div><div class="dashboard-tabs">${tabs.map(([id,t])=>`<button data-tab="${id}" class="${dashboardTab===id?'selected':''}">${t}${id in data.pending ? `<span aria-hidden="true" data-pending-tab="${id}">${data.pending[id] ? ` (${data.pending[id]})` : ''}</span>` : ''}</button>`).join('')}</div><div id="dashboard-content"></div></section>`;
- $('#logout').onclick=async()=>{const r=await api('/logout',{});stopNotificationPolling();state.user=null;state.csrf=r.csrf;specialistApplicationFilter='pending';serviceApplicationFilter='pending';Object.assign(supportView,{status:'',order:'newest'});supportView.open.clear();supportView.drafts.clear();Object.assign(directoryView,{query:'',order:'asc'});directoryView.open.clear();Object.assign(adminFilters,defaultAdminFilters);dashboardMode='master';dashboardTab='bookings';dashboardStatusFilter='all';clearTimeout(dashboardRefreshTimer);updateAccount();location.hash='catalog';catalog();};
+ $('#logout').onclick = async () => endSession(await api('/logout', {}));
  if (hasSpecialistProfile) $('#dashboard-mode').onchange=event=>{
   dashboardMode=event.target.value;
   dashboardTab='bookings';
@@ -462,6 +492,8 @@ async function renderDashboard(background) {
    (reviews.length?reviews.map(r=>`<article class="review panel"><div><strong>${esc(r.specialist)}</strong><span class="stars">${'★'.repeat(r.rating)}</span></div><p>${esc(r.content)}</p><small>${esc(r.author)} · ${date(r.created_at)} · ${reviewStatuses[r.status]}</small>${isAdmin?`<div class="dialog-actions"><button data-moderate="${r.id}" data-status="approved" class="button pale" ${r.status==='approved'?'disabled':''}>Опубликовать</button><button data-moderate="${r.id}" data-status="rejected" class="button outline" ${r.status==='rejected'?'disabled':''}>Отклонить</button></div>`:''}</article>`).join(''): `<div class="empty">${isAdmin ? 'Отзывов с этим статусом нет.' : 'Отзывов пока нет. Клиент может оставить отзыв после завершённой встречи.'}</div>`);
   if (isAdmin) bindAdminFilter(root, 'review-filter');
   $$('[data-moderate]').forEach(b=>b.onclick=async()=>{try{await api('/admin/moderate',{kind:'review',id:Number(b.dataset.moderate),status:b.dataset.status});await refreshCatalog();await dashboard();toast('Статус отзыва обновлён');}catch(e){toast(e.message);}});
+ }else if(dashboardTab==='profile'){
+  renderAccountProfile(root, user);
  }else if(dashboardTab==='schedule'||dashboardTab==='services'){
   const m=section;
   if(dashboardTab==='schedule'){
@@ -547,6 +579,7 @@ async function renderDashboard(background) {
       <div><h3>${esc(specialist.name)}</h3><p>${esc(specialist.profession)} · ${specialist.active ? 'В каталоге' : 'Скрыт'}</p></div>
       <button class="button ${specialist.active ? 'outline' : 'pale'}" data-toggle="specialist"
        data-id="${specialist.id}" data-active="${!specialist.active}">${specialist.active ? 'Скрыть' : 'Показать'}</button>
+      <button class="button outline danger" data-delete-specialist="${specialist.id}">Удалить</button>
      </div>
      ${services.filter(service => service.specialist_id === specialist.id).map(service => `
       <div class="admin-service">
@@ -558,9 +591,19 @@ async function renderDashboard(background) {
   bindAdminFilter(root, 'specialist-visibility');
   bindAdminFilter(root, 'service-visibility');
   $$('[data-toggle]').forEach(b=>b.onclick=async()=>{try{await api('/admin/moderate',{kind:b.dataset.toggle,id:Number(b.dataset.id),active:b.dataset.active==='true'});await refreshCatalog();await dashboard();toast('Изменения сохранены');}catch(e){toast(e.message);}});
+  $$('[data-delete-specialist]', root).forEach(button => button.onclick = () => {
+   managementConfirmation('Удалить специалиста?',
+    'Профиль, услуги и расписание будут закрыты. Аккаунт клиента и история записей сохранятся.',
+    false, async () => {
+     await api('/admin/specialists/' + button.dataset.deleteSpecialist, undefined, 'DELETE');
+     await refreshCatalog();
+     return 'Специалист удалён';
+    }, {back: 'Оставить', confirm: 'Удалить навсегда', lockWhilePending: true});
+  });
  }
  for (const form of $$('form', root)) {
-  const values = () => JSON.stringify([...new FormData(form)]);
+  const values = () => JSON.stringify([...new FormData(form)].map(([key, value]) =>
+   [key, value instanceof File ? [value.name, value.size, value.lastModified] : value]));
   const initial = values();
   form.addEventListener('input', () => form.toggleAttribute('data-dirty', values() !== initial));
  }
@@ -574,6 +617,9 @@ $('#chat-launch').onclick=openChat;
 $('#chat-close').onclick=()=>{$('#chat').classList.add('hidden');chatLauncher.classList.remove('hidden');};
 $('#chat-form').onsubmit=async e=>{e.preventDefault();const input=$('#chat-input'),message=input.value.trim();if(!message)return;const list=$('#chat-messages');list.insertAdjacentHTML('beforeend',`<div class="bubble user">${esc(message)}</div>`);input.value='';const button=$('button',$('#chat-form'));button.disabled=true;try{const r=await api('/consult',{message});list.insertAdjacentHTML('beforeend',`<div class="bubble">${esc(r.reply)}${r.specialist_id?`<button class="button pale" data-profile="${r.specialist_id}" data-preferred-service="${r.service_id}">Посмотреть специалиста ↗</button>`:''}</div>`);bindProfiles(list);}catch(e){list.insertAdjacentHTML('beforeend',`<div class="bubble">${esc(e.message)}. Попробуйте ещё раз.</div>`);}finally{button.disabled=false;list.scrollTop=list.scrollHeight;}};
 $('#modal-close').onclick=closeModal;
+$('#modal').addEventListener('cancel', event => {
+ if ($('#modal form[data-pending-deletion]')) event.preventDefault();
+});
 $('#modal').onclick=e=>{if(e.target===$('#modal')){const r=$('#modal').getBoundingClientRect();if(e.clientX<r.left||e.clientX>r.right||e.clientY<r.top||e.clientY>r.bottom)closeModal();}};
 $('#account').onclick=()=>{if(state.user){location.hash='dashboard';dashboard().catch(e=>toast(e.message));}else login();};
 async function route(){const id=++catalogRequest;try{if(location.hash==='#dashboard'){await dashboard();}else{clearTimeout(dashboardRefreshTimer);stopNotificationPolling();await refreshCatalog();if(id!==catalogRequest)return;catalog();scheduleDashboardRefresh();if(location.hash==='#how')$('#how-section').scrollIntoView({behavior:'smooth'});}$$('[data-nav]').forEach(a=>a.classList.toggle('active',a.getAttribute('href')===(location.hash||'#catalog')));}catch(e){$('#chat').before(chatLauncher);$('#app').innerHTML=`<div class="empty" role="alert"><h2>Не удалось загрузить страницу</h2><p>${esc(e.message)}</p><button id="retry-page" class="button">Повторить загрузку</button></div>`;$('#retry-page').onclick=route;}}

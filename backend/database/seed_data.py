@@ -8,8 +8,8 @@ from backend.database.service_categories import (active_category_id, backfill_ca
                                                 infer_category, initialize_categories, profile_group)
 
 SCHEMA = """
-CREATE TABLE IF NOT EXISTS specialists(id INTEGER PRIMARY KEY,name TEXT,profession TEXT,category TEXT,experience INTEGER,education TEXT,skills TEXT,bio TEXT,photo TEXT,location TEXT,active INTEGER DEFAULT 1);
-CREATE TABLE IF NOT EXISTS users(id INTEGER PRIMARY KEY,name TEXT,email TEXT UNIQUE,password TEXT,role TEXT,specialist_id INTEGER REFERENCES specialists(id));
+CREATE TABLE IF NOT EXISTS specialists(id INTEGER PRIMARY KEY,name TEXT,profession TEXT,category TEXT,experience INTEGER,education TEXT,skills TEXT,bio TEXT,photo TEXT,location TEXT,active INTEGER DEFAULT 1,deleted INTEGER NOT NULL DEFAULT 0);
+CREATE TABLE IF NOT EXISTS users(id INTEGER PRIMARY KEY,name TEXT,email TEXT UNIQUE,password TEXT,role TEXT,specialist_id INTEGER REFERENCES specialists(id),avatar TEXT);
 CREATE TABLE IF NOT EXISTS services(id INTEGER PRIMARY KEY,specialist_id INTEGER REFERENCES specialists(id),title TEXT,price INTEGER,duration INTEGER,mode TEXT,active INTEGER DEFAULT 1);
 CREATE TABLE IF NOT EXISTS slots(id INTEGER PRIMARY KEY,specialist_id INTEGER REFERENCES specialists(id),service_id INTEGER REFERENCES services(id),starts_at TEXT,capacity INTEGER CHECK(capacity>0),active INTEGER DEFAULT 1);
 CREATE TABLE IF NOT EXISTS specialist_schedules(
@@ -232,6 +232,11 @@ def ensure(connection, key, table, match, values, preferred_id=None):
 def initialize_database(connection, current_time):
     connection.executescript(SCHEMA)
     connection.execute('BEGIN IMMEDIATE')
+    for table, field, definition in (
+        ('users', 'avatar', 'TEXT'), ('specialists', 'deleted', 'INTEGER NOT NULL DEFAULT 0')
+    ):
+        if field not in {row['name'] for row in connection.execute(f'PRAGMA table_info({table})')}:
+            connection.execute(f'ALTER TABLE {table} ADD COLUMN {field} {definition}')
     slot_columns = {row['name'] for row in connection.execute('PRAGMA table_info(slots)')}
     if 'booking_mode' not in slot_columns:
         connection.execute("ALTER TABLE slots ADD COLUMN booking_mode TEXT NOT NULL DEFAULT 'manual'")
@@ -250,18 +255,24 @@ def initialize_database(connection, current_time):
         specialist_ids[index] = ensure(connection, f'specialist:{index}', 'specialists',
                                        {'name': person[0], 'profession': person[1]}, values, index)
 
+    deleted_specialists = {row['id'] for row in connection.execute('SELECT id FROM specialists WHERE deleted=1')}
     user_ids = {}
     users = [('Александра Смирнова', 'client', 'client', None), ('Алексей Морозов', 'master', 'master', 1),
              ('Администратор', 'admin', 'admin', None), ('Анна Лебедева', 'teacher', 'master', 4),
              ('Иван Петров', 'ivan', 'client', None)]
     for name, alias, role, specialist in users:
         email = alias + '@svobodno.demo'
+        if specialist_ids.get(specialist) in deleted_specialists:
+            continue
         user_ids[alias] = ensure(connection, f'user:{alias}', 'users', {'email': email},
             lambda: dict(name=name, email=email, role=role, specialist_id=specialist_ids.get(specialist),
                          password=generate_password_hash('Demo2026!')))
 
+    deleted_users = {row['id'] for row in connection.execute("SELECT id FROM users WHERE role='deleted'")}
     service_ids = {}
     for index, (specialist, title, price, duration, mode) in enumerate(SERVICES, 1):
+        if specialist_ids[specialist] in deleted_specialists:
+            continue
         values = dict(specialist_id=specialist_ids[specialist], title=title, price=price, duration=duration,
                       mode=mode, category_id=active_category_id(
                           connection, infer_category(title, PEOPLE[specialist - 1][1])))
@@ -298,6 +309,8 @@ def initialize_database(connection, current_time):
 
     for index, definition in enumerate(SERVICES, 1):
         specialist, _, _, _, mode = definition
+        if index not in service_ids:
+            continue
         service_id = service_ids[index]
         hour = 10 if index in [1, 3, 5, 7, 9, 10] else 14
         for day in range(1, 15):
@@ -307,11 +320,13 @@ def initialize_database(connection, current_time):
             ensure(connection, f'slot:{index}:{day}', 'slots', {'service_id': service_id, 'starts_at': start, 'booking_mode': 'manual'}, values)
 
     for specialist, index in [(1, 1), (3, 5), (4, 7), (5, 9), (6, 10), (2, 3)]:
+        user_id = user_ids.get('client' if specialist == 1 else 'ivan')
+        if index not in service_ids or user_id is None or user_id in deleted_users:
+            continue
         start = (anchor - timedelta(days=7)).replace(hour=10).isoformat(timespec='minutes')
         slot_id = ensure(connection, f'history-slot:{index}', 'slots',
                          {'service_id': service_ids[index], 'starts_at': start, 'booking_mode': 'manual'},
                          dict(specialist_id=specialist_ids[specialist], service_id=service_ids[index], starts_at=start, capacity=1))
-        user_id = user_ids['client' if specialist == 1 else 'ivan']
         booking_id = ensure(connection, f'history-booking:{index}', 'bookings', {'slot_id': slot_id, 'user_id': user_id},
             dict(user_id=user_id, slot_id=slot_id, quantity=1, address='Киров, ул. Московская, 10',
                  note='Демонстрационная завершённая запись', status='completed', created_at=start, total=SERVICES[index-1][2]))
@@ -320,6 +335,7 @@ def initialize_database(connection, current_time):
                 dict(user_id=user_id, specialist_id=specialist_ids[specialist], booking_id=booking_id, rating=5,
                      content='Всё прошло отлично! Внимательное отношение, пунктуальность и отличный результат. Рекомендую.',
                      status='approved', created_at=start[:10]))
-    ensure(connection, 'search:client', 'searches', {'user_id': user_ids['client'], 'query': 'Сантехник'},
-           dict(user_id=user_ids['client'], query='Сантехник', created_at=anchor.isoformat(timespec='minutes')))
+    if user_ids['client'] not in deleted_users:
+        ensure(connection, 'search:client', 'searches', {'user_id': user_ids['client'], 'query': 'Сантехник'},
+               dict(user_id=user_ids['client'], query='Сантехник', created_at=anchor.isoformat(timespec='minutes')))
     connection.execute("INSERT INTO seed_meta(name,value) VALUES('version','1') ON CONFLICT(name) DO UPDATE SET value=excluded.value")

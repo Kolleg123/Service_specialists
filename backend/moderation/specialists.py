@@ -1,4 +1,5 @@
 """Applications for a professional profile, separate from service moderation."""
+from backend.auth.profile import DEFAULT_PHOTO
 from backend.database.service_categories import profile_group
 from backend.moderation.services import ModerationError
 
@@ -63,7 +64,7 @@ def decide_application(connection, application_id, data, clock):
         reason = value.strip()
 
     connection.execute('BEGIN IMMEDIATE')
-    application = connection.execute('''SELECT a.*,u.role,u.specialist_id FROM specialist_applications a
+    application = connection.execute('''SELECT a.*,u.role,u.specialist_id,u.avatar FROM specialist_applications a
         JOIN users u ON u.id=a.user_id WHERE a.id=?''', (application_id,)).fetchone()
     if not application:
         raise ModerationError('Заявка не найдена', 404)
@@ -77,7 +78,7 @@ def decide_application(connection, application_id, data, clock):
         specialist_id = connection.execute('''INSERT INTO specialists
             (name,profession,education,skills,bio,location,category,experience,category_group_id,photo)
             VALUES(?,?,?,?,?,?,?,?,?,?)''',
-            (*(application[key] for key in PROFILE_FIELDS), '/static/favicon.svg')).lastrowid
+            (*(application[key] for key in PROFILE_FIELDS), application['avatar'] or DEFAULT_PHOTO)).lastrowid
         connection.execute("UPDATE users SET role='master',specialist_id=? WHERE id=?", (specialist_id, user_id))
         message = 'Заявка одобрена. В личном кабинете доступен режим «Специалист».'
     else:

@@ -172,6 +172,10 @@ def create_booking(connection, user_id, data, clock):
         raise BookingError('Слишком длинный адрес или комментарий')
 
     connection.execute('BEGIN IMMEDIATE')
+    user = connection.execute("SELECT specialist_id FROM users WHERE id=? AND role IN ('client','master')",
+                              (user_id,)).fetchone()
+    if not user:
+        raise BookingError('Войдите в личный кабинет', 401)
     current_time = clock()
     if mode == 'manual':
         slot = connection.execute(f'''SELECT s.*,v.mode,v.price,v.duration FROM slots s
@@ -196,8 +200,7 @@ def create_booking(connection, user_id, data, clock):
             (user_id, service_id, slot['date'])).fetchone():
             raise BookingError('Вы уже записаны на эту услугу на выбранную дату', 409)
 
-    if connection.execute('SELECT 1 FROM users WHERE id=? AND specialist_id=?',
-                          (user_id, slot['specialist_id'])).fetchone():
+    if user['specialist_id'] == slot['specialist_id']:
         raise BookingError('Записаться на собственную услугу нельзя', 403)
     for key in ('starts_at', 'ends_at', 'duration', 'price'):
         if key in data and data[key] != slot[key]:

@@ -40,13 +40,13 @@ function openNotificationDetails({message, target}) {
  };
 }
 
-function managementConfirmation(title, description, reason, action) {
+function managementConfirmation(title, description, reason, action, options = {}) {
  modal(`<h2>${esc(title)}</h2><p>${esc(description)}</p>
   <form id="management-confirmation">
    ${reason ? '<label class="field">Причина отмены (необязательно)<textarea name="reason" maxlength="500"></textarea></label>' : ''}
    <div class="dialog-actions">
-    <button id="keep-booking" class="button outline" type="button">Назад</button>
-    <button id="confirm-cancel" class="button">Да, подтвердить</button>
+    <button id="keep-booking" class="button outline" type="button">${esc(options.back ?? 'Назад')}</button>
+    <button id="confirm-cancel" class="button">${esc(options.confirm ?? 'Да, подтвердить')}</button>
    </div>
    <p class="form-error" role="alert"></p>
   </form>`);
@@ -55,15 +55,19 @@ function managementConfirmation(title, description, reason, action) {
  form.onsubmit = async event => {
   event.preventDefault();
   const button = $('#confirm-cancel', form);
+  if (button.disabled) return;
   button.disabled = true;
+  if (options.lockWhilePending) form.setAttribute('data-pending-deletion', '');
   try {
    const message = await action(form.elements.reason?.value ?? '');
+   form.removeAttribute('data-pending-deletion');
    if (form.isConnected) closeModal();
    toast(message);
    if (location.hash === '#dashboard') await dashboard();
   } catch (error) {
    $('.form-error', form).textContent = error.message;
   } finally {
+   form.removeAttribute('data-pending-deletion');
    button.disabled = false;
   }
  };
