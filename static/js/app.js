@@ -121,10 +121,27 @@ function bindProfiles(root=document) {
   profile(Number(button.dataset.profile), Number(button.dataset.preferredService))
    .catch(error => toast(error.message)));
 }
-function requestPasswordReset() {
+function requestPasswordReset({email = '', onBack = () => login(), backLabel = 'Вернуться ко входу'} = {}) {
  modal('<span class="eyebrow">ВОССТАНОВЛЕНИЕ ДОСТУПА</span><h2>Забыли пароль?</h2><p class="muted">Укажите почту, связанную с аккаунтом. Если адрес зарегистрирован, мы отправим инструкцию.</p><form id="reset-request-form"><label class="field">Электронная почта<input name="email" type="email" autocomplete="email" required maxlength="120"></label><p class="form-error" role="alert"></p><button class="button full">Отправить ссылку →</button></form>');
- const form=$('#reset-request-form');
- form.onsubmit=async e=>{e.preventDefault();const button=$('button',form);button.disabled=true;try{const r=await api('/password-reset/request',{email:new FormData(form).get('email')});modal('<h2>Проверьте почту</h2><p class="muted">'+esc(r.message)+'</p><button id="back-login" class="button full">Вернуться ко входу</button>');$('#back-login').onclick=()=>login();}catch(err){$('.form-error',form).textContent=err.message;}finally{button.disabled=false;}};
+ const form = $('#reset-request-form');
+ const button = $('button', form);
+ form.elements.email.value = email;
+ form.onsubmit = async event => {
+  event.preventDefault();
+  if (button.disabled) return;
+  button.disabled = true;
+  try {
+   const result = await api('/password-reset/request', {email: form.elements.email.value});
+   if (!form.isConnected || !$('#modal').open) return;
+   modal(`<h2>Проверьте почту</h2><p class="muted">${esc(result.message)}</p>
+    <button id="back-recovery" class="button full">${esc(backLabel)}</button>`);
+   $('#back-recovery').onclick = onBack;
+  } catch (error) {
+   $('.form-error', form).textContent = error.message;
+  } finally {
+   button.disabled = false;
+  }
+ };
 }
 function resetPasswordPage() {
  const token=new URLSearchParams(location.hash.slice(1)).get('token')||
@@ -141,7 +158,7 @@ function login(after=null,register=false) {
  form.onsubmit=e=>{e.preventDefault();submit(Object.fromEntries(new FormData(form)));};
  $$('[data-demo]').forEach(b=>b.onclick=()=>submit({email:b.dataset.demo+'@svobodno.demo',password:'Demo2026!'}));
  $('#auth-switch').onclick=()=>login(after,!register);
- $('#forgot-password')?.addEventListener('click',requestPasswordReset);
+ $('#forgot-password')?.addEventListener('click', () => requestPasswordReset({onBack: () => login(after)}));
 }
 let notificationTimer;
 const notificationRequests = new Map();
