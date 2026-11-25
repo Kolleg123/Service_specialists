@@ -228,7 +228,8 @@ def create_app(test_config=None):
                 s['rating'] = round(sum(r['rating'] for r in s['reviews']) / len(s['reviews']), 1) if s['reviews'] else None
                 s['next_slot'] = c.execute('SELECT MIN(starts_at) FROM slots WHERE specialist_id=? AND starts_at>? AND active=1', (s['id'], now().isoformat(timespec='minutes'))).fetchone()[0]
                 specialists.append(s)
-        return jsonify(specialists=specialists, categories=CATEGORIES, timezone='Europe/Kirov')
+            categories = [row['name'] for row in c.execute('SELECT name FROM service_categories WHERE active=1 ORDER BY id')]
+        return jsonify(specialists=specialists, categories=['Все специалисты', *categories], timezone='Europe/Kirov')
 
     @app.get('/api/slots/<int:specialist_id>')
     def slots(specialist_id):
