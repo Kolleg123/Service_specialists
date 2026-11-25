@@ -14,11 +14,11 @@ let dashboardRefreshTimer;
 let dashboardRequest = 0;
 let catalogRequest = 0;
 const chatLauncher = $('#chat-launch');
-async function api(path, data) {
+async function api(path, data, method) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 15000);
   try {
-    const response = await fetch('/api' + path, {method:data === undefined ? 'GET':'POST', signal:controller.signal,
+    const response = await fetch('/api' + path, {method:method || (data === undefined ? 'GET':'POST'), signal:controller.signal,
       headers:{'Content-Type':'application/json','X-CSRF-Token':state.csrf}, body:data === undefined ? undefined : JSON.stringify(data)});
     let result; try { result = await response.json(); } catch { throw new Error('Сервер временно недоступен'); }
     if (!response.ok) { const error = new Error(result.error || 'Не удалось выполнить действие'); error.status = response.status; throw error; }
@@ -230,9 +230,9 @@ async function dashboard() {
   avatarFile.onchange=()=>{const file=avatarFile.files[0];if(file)$('#avatar-preview').innerHTML='<img src="'+URL.createObjectURL(file)+'" alt="">';};
   avatarForm.onsubmit=async e=>{e.preventDefault();const file=avatarFile.files[0];if(!file){$('.form-error',avatarForm).textContent='Выберите фото';return;}const formData=new FormData();formData.append('avatar',file);const button=$('button[type=submit]',avatarForm);button.disabled=true;try{const response=await fetch('/api/profile/avatar',{method:'POST',headers:{'X-CSRF-Token':state.csrf},body:formData});const result=await response.json();if(!response.ok)throw new Error(result.error||'Не удалось сохранить фото');state.user=result.user;state.csrf=result.csrf;updateAccount();toast('Фото профиля обновлено');await dashboard();}catch(error){$('.form-error',avatarForm).textContent=error.message;}finally{button.disabled=false;}};
   const profileForm=$('#profile-form');
-  profileForm.onsubmit=async e=>{e.preventDefault();try{const result=await api('/profile',Object.fromEntries(new FormData(profileForm)));state.user=result.user;state.csrf=result.csrf;updateAccount();toast('Профиль сохранён');await dashboard();}catch(error){$('.form-error',profileForm).textContent=error.message;}};
+  profileForm.onsubmit=async e=>{e.preventDefault();try{const result=await api('/profile',Object.fromEntries(new FormData(profileForm)),'PATCH');state.user=result.user;state.csrf=result.csrf;updateAccount();toast('Профиль сохранён');await dashboard();}catch(error){$('.form-error',profileForm).textContent=error.message;}};
   $('#delete-account')?.addEventListener('click',()=>modal('<h2>Удалить аккаунт?</h2><p>Все ваши записи, отзывы и история поиска будут удалены. Действие нельзя отменить.</p><div class="dialog-actions"><button id="keep-account" class="button outline">Оставить аккаунт</button><button id="confirm-delete" class="button danger">Удалить навсегда</button></div>'));
-  $('#confirm-delete')?.addEventListener('click',async()=>{try{const response=await api('/account',{});state.user=null;state.csrf=response.csrf;updateAccount();closeModal();toast('Аккаунт удалён');location.hash='catalog';await route();}catch(error){closeModal();toast(error.message);}});
+  $('#confirm-delete')?.addEventListener('click',async()=>{try{const response=await api('/account',{},'DELETE');state.user=null;state.csrf=response.csrf;updateAccount();closeModal();toast('Аккаунт удалён');location.hash='catalog';await route();}catch(error){closeModal();toast(error.message);}});
  }else if(dashboardTab==='schedule'||dashboardTab==='services'){
   const m=await api('/master');
   if(dashboardTab==='schedule'){
