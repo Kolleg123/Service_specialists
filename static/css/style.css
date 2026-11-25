@@ -174,7 +174,9 @@ footer .logo svg{width:27px;height:27px}
  .dashboard-heading{align-items:flex-start;flex-wrap:wrap}
  .dashboard-heading>div:first-child{width:100%}
  .dashboard-actions{width:100%;justify-content:space-between}
- .notification-panel{right:auto;left:0;width:min(390px,calc(100vw - 36px))}
+ .notification-control{position:static}
+ .notification-panel{right:0;left:0;width:auto}
+ .filters{max-width:100%;flex-wrap:wrap}
  .notification-trigger{font-size:10px}
  dialog h2{font-size:24px}
 }

@@ -114,7 +114,7 @@ test('mobile catalog, filtering, loaded stock photos and no overflow', async ({ 
     await expect(img).toHaveJSProperty('complete', true);
     expect(await img.evaluate(i => i.naturalWidth)).toBeGreaterThan(0);
   }
-  await page.getByRole('button', { name: 'Обучение', exact: false }).click();
+  await page.locator('#direction-filter').selectOption('education');
   await expect(page.locator('.specialist-card')).toHaveCount(1);
   await expect(page.locator('.specialist-card')).toContainText('Анна Лебедева');
   await page.getByRole('button', { name: 'Сбросить', exact: true }).click();
