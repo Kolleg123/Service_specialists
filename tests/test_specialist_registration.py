@@ -100,7 +100,8 @@ def test_specialist_keeps_client_actions_and_cannot_book_own_service(app, monkey
     assert post(admin, f'{ADMIN}/{application_id}/decision', {'status': 'approved'}).status_code == 200
     specialist_id = specialist.get('/api/session').json['user']['specialist_id']
     service_id = post(specialist, '/master/services', {'title': 'Урок английского', 'price': 500,
-                                                     'duration': 60, 'mode': 'Онлайн'}).json['id']
+                                                     'duration': 60, 'mode': 'Онлайн',
+                                                     'category_id': 'english'}).json['id']
     assert post(admin, f'/admin/service-applications/{service_id}/decision', {'status': 'approved'}).status_code == 200
     starts_at = (app_module.now() + timedelta(days=2)).replace(hour=10).isoformat(timespec='minutes')
     assert post(specialist, '/master/slots', {'service_id': service_id, 'starts_at': starts_at}).status_code == 201

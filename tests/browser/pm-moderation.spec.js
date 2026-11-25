@@ -27,10 +27,16 @@ test('service applications are private until approval and decisions reach the ma
     const form = page.locator('#service-form');
     await form.getByLabel('Название').fill(title);
     await form.getByLabel('Стоимость').fill('800');
+    await form.getByLabel('Направление').selectOption('home-repair');
+    const category = title === approved ? 'heating' : 'air-conditioning';
+    await form.getByLabel('Поиск категории').fill(title === approved ? 'отоплен' : 'вентиляция');
+    await form.getByLabel('Категория услуги').selectOption(category);
     await form.getByRole('button', { name: 'Добавить услугу' }).click();
     await expect(page.locator('.service-row').filter({ hasText: title })).toContainText('На проверке');
   }
   await logout(page);
+  await page.locator('#direction-filter').selectOption('home-repair');
+  await expect(page.locator('#category-filter option[value="heating"]')).toHaveCount(0);
   await search(page, approved);
   await expect(page.locator('.specialist-card')).toHaveCount(0);
 
@@ -45,14 +51,23 @@ test('service applications are private until approval and decisions reach the ma
   await expect(rejection).toHaveCount(0);
   const approval = page.locator('details[data-application-key]').filter({ hasText: approved });
   await approval.locator('summary').click();
+  await expect(approval).toContainText('Дом и ремонт / Монтаж отопления');
   await approval.getByRole('button', { name: 'Одобрить' }).click();
   await expect(approval).toHaveCount(0);
   await logout(page);
 
+  await expect(page.locator('#direction-filter')).toHaveValue('home-repair');
+  await page.locator('#category-filter').selectOption('heating');
   await search(page, approved);
   await expect(page.locator('.specialist-card')).toHaveCount(1);
+  await page.locator('#mode-filter').selectOption('Онлайн');
+  await expect(page.locator('.specialist-card')).toHaveCount(0);
+  await page.locator('#mode-filter').selectOption('Выезд');
+  await page.locator('#price-filter').selectOption('1500');
+  await expect(page.locator('.specialist-card')).toHaveCount(1);
   await page.getByRole('button', { name: 'Профиль: Алексей Морозов' }).click();
-  await expect(page.locator('#booking-service')).toContainText(approved);
+  await expect(page.locator('#booking-service option:checked')).toContainText(approved);
+  await expect(page.locator('#booking-service')).toContainText('Устранение протечки');
   await expect(page.locator('#booking-service')).not.toContainText(rejected);
   await page.getByRole('button', { name: 'Закрыть окно' }).click();
   await search(page, rejected);
@@ -83,6 +98,7 @@ test('open moderation and service tabs refresh without reloading', async ({ brow
     const form = master.locator('#service-form');
     await form.getByLabel('Название').fill(title);
     await form.getByLabel('Стоимость').fill('900');
+    await form.getByLabel('Категория услуги').selectOption('plumbing');
     await form.getByRole('button', { name: 'Добавить услугу' }).click();
     const service = master.locator('.service-row').filter({ hasText: title });
     await expect(service).toContainText('На проверке');

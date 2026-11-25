@@ -45,6 +45,7 @@ def test_slot_horizon_and_capacity_boundaries(tmp_path, monkeypatch):
         "price": 0,
         "duration": 15,
         "mode": "Группа",
+        "category_id": "workshops",
     })
     assert group.status_code == 201
     group_id = master.get("/api/master").json["services"][-1]["id"]
@@ -116,7 +117,9 @@ def test_dangling_specialist_relations_are_ignored_without_server_errors(tmp_pat
     master = client(app, "master")
     result = master.get("/api/master")
     assert result.status_code == 200
-    assert result.json == {"services": [], "slots": []}
+    assert result.json["services"] == []
+    assert result.json["slots"] == []
+    assert result.json["categories"] != []
 
     # A booking whose joined specialist no longer exists is not rendered as a
     # broken dashboard row; the endpoint remains available.

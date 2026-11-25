@@ -57,17 +57,22 @@ function bindScheduleForm() {
 }
 
 
-async function profile(id) {
-  const specialist = state.specialists.find(s => s.id === id);
-  if (!specialist) return toast('Специалист сейчас недоступен');
-  activeBooking = new BookingFlow(specialist);
+async function profile(id, preferredServiceId) {
+  let specialist = state.specialists.find(s => s.id === id);
+  if (!specialist || (preferredServiceId && !specialist.services.some(service => service.id === preferredServiceId))) {
+    const {specialists} = await api('/catalog');
+    specialist = specialists.find(s => s.id === id);
+  }
+  if (!specialist?.services.length) return toast('Специалист сейчас недоступен');
+  activeBooking = new BookingFlow(specialist, preferredServiceId);
   activeBooking.open();
 }
 
 class BookingFlow {
-  constructor(specialist) {
+  constructor(specialist, preferredServiceId) {
     this.specialist = specialist;
-    this.serviceId = specialist.services[0]?.id ?? null;
+    const preferred = specialist.services.find(service => service.id === preferredServiceId);
+    this.serviceId = (preferred ?? specialist.services[0])?.id ?? null;
     this.step = 1;
     this.slots = [];
     this.day = null;
@@ -98,6 +103,7 @@ class BookingFlow {
       <div id="booking-notice" role="status" aria-live="polite"></div>
       <div id="step-content"></div>
     </section>`);
+    if (this.serviceId !== null) $('#booking-service').value = String(this.serviceId);
     $('#booking-service').onchange = e => {
       this.serviceId = Number(e.target.value);
       this.resetChoice('Услуга изменена. Прежние дата и время сброшены — выберите новый слот.');
@@ -259,7 +265,7 @@ class BookingFlow {
 
   async submit() {
     if (this.submitting || !this.slot) return;
-    if (!state.user) { login(() => profile(this.specialist.id)); return; }
+    if (!state.user) { login(() => profile(this.specialist.id, this.serviceId)); return; }
     const snapshot = {...this.slot};
     const generation = this.generation;
     this.submitting = true;

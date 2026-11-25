@@ -90,7 +90,8 @@ def test_schedule_and_service_creation(app):
     d['starts_at'] = when
     d['capacity'] = 2
     assert post(c, '/master/slots', d).status_code == 400
-    assert post(c, '/master/services', {'title': 'Семинар о сантехнике', 'price': 500, 'duration': 60, 'mode': 'Группа'}).status_code == 201
+    assert post(c, '/master/services', {'title': 'Семинар о сантехнике', 'price': 500, 'duration': 60, 'mode': 'Группа',
+                                       'category_id': 'workshops'}).status_code == 201
     service = c.get('/api/master').json['services'][-1]
     d.update(service_id=service['id'], starts_at=(now()+timedelta(days=21)).isoformat(timespec='minutes'), capacity=10)
     assert post(c, '/master/slots', d).status_code == 201
