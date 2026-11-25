@@ -55,6 +55,10 @@ def create_support(connection, user, data, clock):
         raise ModerationError('Некорректный ключ отправки')
 
     connection.execute('BEGIN IMMEDIATE')
+    user = connection.execute("SELECT id,name,email,role FROM users WHERE id=? AND role!='deleted'",
+                              (user['id'],)).fetchone()
+    if not user:
+        raise ModerationError('Войдите в личный кабинет', 401)
     previous = connection.execute('''SELECT id,title,description,request_key FROM support_requests
         WHERE user_id=? AND (request_key=? OR (status='pending' AND title=? AND description=?))
         ORDER BY request_key IS ? DESC LIMIT 1''', (user['id'], key, title, description, key)).fetchone()

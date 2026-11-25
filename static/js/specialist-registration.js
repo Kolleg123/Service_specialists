@@ -8,7 +8,7 @@ const applicationTextFields = [
 ];
 
 function renderSpecialistApplication(root, application, user, categories) {
- const canApply = user.role === 'client' && (!application || application.status === 'rejected');
+ const canApply = user.role === 'client' && application?.status !== 'pending';
  root.innerHTML = `<h2>Стать специалистом</h2>
   ${application ? `<p>Статус заявки: <strong>${serviceStatus[application.status]}</strong></p>` : ''}
   ${application?.reason ? `<p>Причина отклонения: ${esc(application.reason)}</p>` : ''}`;

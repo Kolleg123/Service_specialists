@@ -17,6 +17,8 @@ from backend.bookings.service import BookingError, available_slots, create_booki
 from backend.bookings.lifecycle import (CUSTOMER_ROLES, booking_interval, booking_policy, cancellation_reason,
                                store_transition, transition_booking, upcoming_master_bookings)
 from backend.auth.password_recovery import send_recovery_email
+from backend.auth.profile import (AVATAR_NAME, IMAGE_TYPES, ProfileError, account, remove_unused_avatars,
+                                  retire_account, retire_specialist, set_avatar, update_details, validate_avatar)
 from backend.database.category_management import admin_directory, remove_category, save_category
 from backend.database.service_categories import active_category_id, category_groups
 from backend.support import STATUSES, create_support, support_items, update_support
@@ -35,7 +37,8 @@ def now():
 
 def create_app(test_config=None):
     app = Flask(__name__, static_folder='static')
-    app.config.update(DATABASE=os.path.join(app.instance_path, 'svobodno.sqlite'), SESSION_COOKIE_HTTPONLY=True,
+    app.config.update(DATABASE=os.path.join(app.instance_path, 'svobodno.sqlite'),
+                      UPLOAD_FOLDER=os.path.join(app.instance_path, 'uploads'), SESSION_COOKIE_HTTPONLY=True,
                       SESSION_COOKIE_SAMESITE='Lax', SESSION_COOKIE_SECURE=os.environ.get('COOKIE_SECURE', '').lower() in ('1', 'true', 'yes'), MAX_CONTENT_LENGTH=1024 * 1024,
                       SMTP_HOST=os.environ.get('SMTP_HOST', ''), SMTP_PORT=int(os.environ.get('SMTP_PORT', '587')),
                       SMTP_USERNAME=os.environ.get('SMTP_USERNAME', ''), SMTP_PASSWORD=os.environ.get('SMTP_PASSWORD', ''),
@@ -44,6 +47,7 @@ def create_app(test_config=None):
                       PASSWORD_RESET_TTL_MINUTES=30, PASSWORD_RESET_LIMIT=3, PASSWORD_RESET_WINDOW_MINUTES=60)
     if test_config:
         app.config.update(test_config)
+    uploads = Path(app.config['UPLOAD_FOLDER'])
     Path(app.instance_path).mkdir(exist_ok=True)
     key = Path(app.instance_path) / 'session.key'
     if not key.exists():
@@ -74,7 +78,7 @@ def create_app(test_config=None):
             @wraps(fn)
             def wrapped(*args, **kwargs):
                 with db() as c:
-                    user = c.execute('SELECT * FROM users WHERE id=?', (session.get('uid'),)).fetchone()
+                    user = account(c, session.get('uid'))
                 if not user:
                     return fail('Войдите в личный кабинет', 401)
                 if roles and user['role'] not in roles:
@@ -88,6 +92,12 @@ def create_app(test_config=None):
         if request.method in ('POST', 'PATCH', 'DELETE'):
             if not session.get('csrf') or request.headers.get('X-CSRF-Token') != session['csrf']:
                 return fail('Обновите страницу и повторите действие', 403)
+            if request.method == 'POST' and request.path == '/api/profile/avatar':
+                if request.mimetype != 'multipart/form-data':
+                    return fail('Ожидается файл изображения', 415)
+                return None
+            if request.method == 'DELETE':
+                return None
             if not request.is_json:
                 return fail('Ожидается JSON', 415)
             if not isinstance(request.get_json(), dict):
@@ -105,6 +115,14 @@ def create_app(test_config=None):
     def bad_request(_):
         return fail('Некорректный запрос')
 
+    @app.errorhandler(413)
+    def request_too_large(_):
+        return fail('Размер запроса не должен превышать 1 МБ', 413)
+
+    @app.errorhandler(ProfileError)
+    def profile_error(error):
+        return fail(str(error), error.status)
+
     @app.route('/')
     @app.route('/reset-password')
     def index():
@@ -114,7 +132,7 @@ def create_app(test_config=None):
     def current():
         session.setdefault('csrf', secrets.token_hex(24))
         with db() as c:
-            user = c.execute('SELECT id,name,email,role,specialist_id FROM users WHERE id=?', (session.get('uid'),)).fetchone()
+            user = c.execute('SELECT id,name,email,role,specialist_id,avatar FROM users WHERE id=? AND role!="deleted"', (session.get('uid'),)).fetchone()
         return jsonify(user=dict(user) if user else None, csrf=session['csrf'])
 
     @app.post('/api/login')
@@ -206,6 +224,76 @@ def create_app(test_config=None):
     def logout():
         session.clear()
         return current()
+
+    def cleanup_avatars(candidates):
+        try:
+            with db() as c:
+                remove_unused_avatars(c, uploads, candidates)
+        except OSError:
+            app.logger.warning('Could not remove an unused profile image', exc_info=True)
+
+    @app.patch('/api/profile')
+    @auth(*CUSTOMER_ROLES)
+    def update_profile(user):
+        with db() as c:
+            update_details(c, user['id'], request.get_json())
+        return current()
+
+    @app.post('/api/profile/avatar')
+    @auth(*CUSTOMER_ROLES)
+    def update_avatar(user):
+        image = request.files.get('avatar')
+        extension = validate_avatar(image)
+        filename = f"user-{user['id']}-{secrets.token_hex(12)}{extension}"
+        path = uploads / filename
+        uploads.mkdir(parents=True, exist_ok=True)
+        created = False
+        try:
+            with path.open('xb') as target:
+                created = True
+                image.save(target)
+            with db() as c:
+                previous = set_avatar(c, user['id'], f'/uploads/{filename}')
+        except Exception:
+            if created:
+                path.unlink(missing_ok=True)
+            raise
+        cleanup_avatars(previous)
+        return current()
+
+    @app.get('/uploads/<name>')
+    def uploaded_file(name):
+        if not AVATAR_NAME.fullmatch(name):
+            return fail('Файл не найден', 404)
+        with db() as c:
+            url = f'/uploads/{name}'
+            if not c.execute('SELECT 1 FROM users WHERE avatar=? UNION ALL SELECT 1 FROM specialists WHERE photo=?',
+                             (url, url)).fetchone():
+                return fail('Файл не найден', 404)
+        response = send_from_directory(uploads, name, mimetype=IMAGE_TYPES[Path(name).suffix][1])
+        response.headers['X-Content-Type-Options'] = 'nosniff'
+        response.headers['Cache-Control'] = 'no-cache'
+        return response
+
+    @app.delete('/api/account')
+    @auth(*CUSTOMER_ROLES)
+    def delete_account(user):
+        with db() as c:
+            previous = retire_account(c, user['id'], now())
+        cleanup_avatars(previous)
+        session.clear()
+        return current()
+
+    @app.delete('/api/admin/specialists/<int:ident>')
+    @auth('admin')
+    def delete_specialist(user, ident):
+        if not 1 <= ident < 2**63:
+            return fail('Специалист не найден', 404)
+        with db() as c:
+            c.execute('BEGIN IMMEDIATE')
+            photo = retire_specialist(c, ident)
+        cleanup_avatars((photo,))
+        return jsonify(ok=True)
 
     @app.get('/api/catalog')
     def catalog():
@@ -393,7 +481,7 @@ def create_app(test_config=None):
         rows = [{**dict(b), **booking_policy(b, user, current_time, b['id'] in reviewed_ids)} for b in bookings]
         return jsonify(bookings=rows, pending=pending, searches=[dict(r) for r in searches], reviews=[dict(r) for r in reviews],
                        specialist_application=application, specialist_categories=profile_groups,
-                       user={key: user[key] for key in ('id', 'name', 'email', 'role', 'specialist_id')},
+                       user={key: user[key] for key in ('id', 'name', 'email', 'role', 'specialist_id', 'avatar')},
                        server_now=current_time.isoformat(timespec='seconds'))
 
     def apply_booking_transition(user, ident, action):
@@ -456,6 +544,8 @@ def create_app(test_config=None):
             return fail('Оцените от 1 до 5 и напишите отзыв от 5 до 1500 символов')
         with db() as c:
             c.execute('BEGIN IMMEDIATE')
+            if not account(c, user['id']):
+                return fail('Войдите в личный кабинет', 401)
             b = c.execute('SELECT b.*,s.specialist_id,s.starts_at,s.ends_at slot_ends_at,v.duration FROM bookings b JOIN slots s ON s.id=b.slot_id JOIN services v ON v.id=s.service_id WHERE b.id=? AND b.user_id=? AND b.status="completed"', (d.get('booking_id'), user['id'])).fetchone()
             if not b:
                 return fail('Отзыв доступен после завершённой встречи', 403)
@@ -473,7 +563,8 @@ def create_app(test_config=None):
         query = str(request.get_json().get('query', '')).strip()[:150]
         if query:
             with db() as c:
-                c.execute('INSERT INTO searches(user_id,query,created_at) VALUES(?,?,?)', (user['id'], query, now().isoformat(timespec='minutes')))
+                c.execute("INSERT INTO searches(user_id,query,created_at) SELECT id,?,? FROM users WHERE id=? AND role!='deleted'",
+                          (query, now().isoformat(timespec='minutes'), user['id']))
         return jsonify(ok=True)
 
     @app.post('/api/consult')
@@ -481,12 +572,12 @@ def create_app(test_config=None):
         message = str(request.get_json().get('message', '')).strip().lower()
         if not 1 <= len(message) <= 1000:
             return fail('Опишите задачу в пределах 1000 символов')
-        rules = [(['кран', 'теч', 'труба', 'сантех', 'унитаз', 'засор'], 1, ('plumbing',), 'Похоже, вам нужен сантехник. Если вода течёт, по возможности перекройте её подачу. Алексей поможет найти причину и устранить протечку.'),
+        rules = [(['кран', 'теч', 'труба', 'сантех', 'унитаз', 'засор'], 1, ('plumbing',), 'Похоже, вам нужен сантехник. Если вода течёт, по возможности перекройте её подачу. Специалист поможет найти причину и устранить протечку.'),
                  (['розет', 'электр', 'провод', 'свет'], 2, ('electrical',), 'Рекомендую электрика. Не касайтесь оголённых проводов. При запахе гари отключите питание, если это безопасно, и обратитесь в аварийную службу.'),
-                 (['стриж', 'волос', 'уклад', 'красот'], 3, ('hair',), 'С новой стрижкой и уходом за волосами поможет стилист Мария.'),
-                 (['англий', 'язык', 'экзамен', 'репетитор'], 4, ('english',), 'Для занятий английским рекомендую Анну. Можно выбрать индивидуальный урок или разговорный клуб.'),
-                 (['массаж', 'спин', 'мышц'], 5, ('massage',), 'По расслабляющему массажу можно обратиться к Дмитрию. При боли или травме сначала обратитесь к врачу: этот помощник не ставит диагнозов.'),
-                 (['семинар', 'фото', 'съём', 'мастер-класс'], 6, ('portrait', 'photo-lessons'), 'Елена проводит фотосессии и групповые мастер-классы. При записи на мастер-класс выберите количество мест.')]
+                 (['стриж', 'волос', 'уклад', 'красот'], 3, ('hair',), 'С новой стрижкой и уходом за волосами поможет стилист.'),
+                 (['англий', 'язык', 'экзамен', 'репетитор'], 4, ('english',), 'Для занятий английским рекомендую преподавателя. Можно выбрать индивидуальный урок или разговорный клуб.'),
+                 (['массаж', 'спин', 'мышц'], 5, ('massage',), 'По расслабляющему массажу можно обратиться к массажисту. При боли или травме сначала обратитесь к врачу: этот помощник не ставит диагнозов.'),
+                 (['семинар', 'фото', 'съём', 'мастер-класс'], 6, ('portrait', 'photo-lessons'), 'Специалист проводит фотосессии и групповые мастер-классы. При записи на мастер-класс выберите количество мест.')]
         if any(x in message for x in ['газ', 'пожар', 'задыха', 'груд', 'искрит']):
             return jsonify(reply='Это может быть экстренная ситуация. При непосредственной опасности звоните 112. Обычная запись к специалисту не заменяет экстренную помощь.', specialist_id=None)
         for words, seed_id, category_ids, reply in rules:
@@ -532,7 +623,7 @@ def create_app(test_config=None):
         try:
             with db() as c:
                 c.execute('BEGIN IMMEDIATE')
-                if not c.execute('SELECT 1 FROM specialists WHERE id=?', (user['specialist_id'],)).fetchone():
+                if not c.execute('SELECT 1 FROM specialists WHERE id=? AND deleted=0', (user['specialist_id'],)).fetchone():
                     return fail('Профиль специалиста не найден', 404)
                 save_schedule(c, user['specialist_id'], request.get_json())
                 schedule = schedule_for(c, user['specialist_id'])
@@ -547,7 +638,7 @@ def create_app(test_config=None):
             with db() as c:
                 c.execute('BEGIN IMMEDIATE')
                 fields = service_fields(c, request.get_json())
-                if not c.execute('SELECT 1 FROM specialists WHERE id=?', (user['specialist_id'],)).fetchone():
+                if not c.execute('SELECT 1 FROM specialists WHERE id=? AND deleted=0', (user['specialist_id'],)).fetchone():
                     return fail('Профиль специалиста не найден', 404)
                 ident = c.execute('''INSERT INTO services(specialist_id,title,price,duration,mode,category_id,moderation_status)
                     VALUES(?,?,?,?,?,?,'pending')''', (user['specialist_id'], *fields.values())).lastrowid
@@ -682,7 +773,7 @@ def create_app(test_config=None):
     @auth('admin')
     def admin(user):
         with db() as c:
-            return jsonify(specialists=[dict(r) for r in c.execute('SELECT * FROM specialists')],
+            return jsonify(specialists=[dict(r) for r in c.execute('SELECT * FROM specialists WHERE deleted=0')],
                            services=[dict(r) for r in c.execute('SELECT v.*,p.name specialist FROM services v JOIN specialists p ON p.id=v.specialist_id WHERE v.deleted=0')])
 
     @app.post('/api/specialist-applications')
@@ -758,7 +849,7 @@ def create_app(test_config=None):
                 cur = c.execute('UPDATE reviews SET status=? WHERE id=?', (d['status'], ident))
             elif kind in ['specialist', 'service'] and type(d.get('active')) is bool:
                 table = 'specialists' if kind == 'specialist' else 'services'
-                scope = ' AND deleted=0' if kind == 'service' else ''
+                scope = ' AND deleted=0'
                 cur = c.execute(f'UPDATE {table} SET active=? WHERE id=?{scope}', (int(d['active']), ident))
             else:
                 return fail('Некорректное действие модерации')
