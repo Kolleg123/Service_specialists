@@ -222,6 +222,27 @@ function bookingActions(booking) {
  return `<strong>${money(booking.total)}</strong>${buttons.join('')}${reasons}`;
 }
 let serviceApplicationFilter = 'pending';
+const defaultAdminFilters = {'review-filter':'pending', 'specialist-visibility':'all', 'service-visibility':'all'};
+const adminFilters = {...defaultAdminFilters};
+const reviewStatuses = {pending:'На модерации', approved:'Опубликован', rejected:'Отклонён'};
+const visibilityOptions = [['all','Все'], ['active','Не скрытые'], ['hidden','Скрытые']];
+
+function adminFilter(id, label, options) {
+ return `<label class="field">${label}<select id="${id}">${options.map(([value, name]) =>
+  `<option value="${value}" ${adminFilters[id] === value ? 'selected' : ''}>${name}</option>`).join('')}</select></label>`;
+}
+
+function bindAdminFilter(root, id) {
+ const filter = $('#' + id, root);
+ filter.onchange = () => {
+  adminFilters[id] = filter.value;
+  dashboard().then(() => $('#' + id)?.focus()).catch(error => toast(error.message));
+ };
+}
+
+function matchesVisibility(item, filter) {
+ return filter === 'all' || Boolean(item.active) === (filter === 'active');
+}
 let dashboardSnapshot;
 let dashboardLoads = 0;
 let catalogRefreshPending = false;
@@ -325,7 +346,7 @@ async function renderDashboard(background) {
  if(!tabs.some(x=>x[0]===dashboardTab))dashboardTab='bookings';
  const notificationControl=isAdmin?'':`<div class="notification-control"><button id="notifications-toggle" class="button outline notification-trigger" aria-label="Уведомления" aria-expanded="false" aria-controls="notifications-panel"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 9a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9M10 21h4"/></svg><span>Уведомления</span><span class="notification-count hidden" aria-hidden="true"></span></button><div id="notifications-panel" class="notification-panel hidden" aria-label="Список уведомлений"></div></div>`;
  $('#app').innerHTML=`<section class="dashboard"><div class="dashboard-heading"><div><span class="eyebrow">${isClient?'ЛИЧНЫЙ КАБИНЕТ':isMaster?'КАБИНЕТ СПЕЦИАЛИСТА':'АДМИНИСТРИРОВАНИЕ'}</span><h1>Здравствуйте, ${esc(user.name.split(' ')[0])}<span class="wave">✧</span></h1><p class="muted">${isClient?'Встречи, которые делают жизнь проще.':isMaster?'Ваше время, ваши услуги и ваши клиенты.':'Управляйте качеством сервиса и публикациями.'}</p></div><div class="dashboard-actions">${modeControl}${notificationControl}<button id="logout" class="button outline">Выйти ↗</button></div></div><div class="stats"><div><span>${isClient?'Предстоящих встреч':'Активных записей'}</span><strong>${data.bookings.filter(b=>isClient?b.phase==='upcoming':b.status==='confirmed').length}</strong></div><div><span>Завершённых встреч</span><strong>${data.bookings.filter(b=>b.status==='completed').length}</strong></div><div><span>${isAdmin?'На модерации':'Всего записей'}</span><strong>${isAdmin?data.reviews.filter(r=>r.status==='pending').length:data.bookings.length}</strong></div></div><div class="dashboard-tabs">${tabs.map(([id,t])=>`<button data-tab="${id}" class="${dashboardTab===id?'selected':''}">${t}${id in data.pending ? `<span aria-hidden="true" data-pending-tab="${id}">${data.pending[id] ? ` (${data.pending[id]})` : ''}</span>` : ''}</button>`).join('')}</div><div id="dashboard-content"></div></section>`;
- $('#logout').onclick=async()=>{const r=await api('/logout',{});stopNotificationPolling();state.user=null;state.csrf=r.csrf;specialistApplicationFilter='pending';serviceApplicationFilter='pending';dashboardMode='master';dashboardTab='bookings';dashboardStatusFilter='all';clearTimeout(dashboardRefreshTimer);updateAccount();location.hash='catalog';catalog();};
+ $('#logout').onclick=async()=>{const r=await api('/logout',{});stopNotificationPolling();state.user=null;state.csrf=r.csrf;specialistApplicationFilter='pending';serviceApplicationFilter='pending';Object.assign(adminFilters,defaultAdminFilters);dashboardMode='master';dashboardTab='bookings';dashboardStatusFilter='all';clearTimeout(dashboardRefreshTimer);updateAccount();location.hash='catalog';catalog();};
  if (hasSpecialistProfile) $('#dashboard-mode').onchange=event=>{
   dashboardMode=event.target.value;
   dashboardTab='bookings';
@@ -378,7 +399,13 @@ async function renderDashboard(background) {
   root.innerHTML='<h2>Недавно вы искали</h2>'+(data.searches.length?data.searches.map(s=>`<button class="search-history" data-query-history="${esc(s.query)}"><span>⌕ &nbsp; ${esc(s.query)}</span><small>${date(s.created_at)}</small><span>↗</span></button>`).join(''):'<div class="empty">Ваши поисковые запросы появятся здесь.</div>');
   $$('[data-query-history]').forEach(b=>b.onclick=()=>{state.query=b.dataset.queryHistory;state.category='Все специалисты';state.mode='';state.maxPrice='';location.hash='catalog';});
  }else if(dashboardTab==='reviews'||dashboardTab==='moderation'){
-  root.innerHTML=`<h2>${isAdmin?'Отзывы и модерация':'Мои отзывы'}</h2>`+(data.reviews.length?data.reviews.map(r=>`<article class="review panel"><div><strong>${esc(r.specialist)}</strong><span class="stars">${'★'.repeat(r.rating)}</span></div><p>${esc(r.content)}</p><small>${esc(r.author)} · ${date(r.created_at)} · ${{pending:'На модерации',approved:'Опубликован',rejected:'Отклонён'}[r.status]}</small>${isAdmin?`<div class="dialog-actions"><button data-moderate="${r.id}" data-status="approved" class="button pale" ${r.status==='approved'?'disabled':''}>Опубликовать</button><button data-moderate="${r.id}" data-status="rejected" class="button outline" ${r.status==='rejected'?'disabled':''}>Отклонить</button></div>`:''}</article>`).join(''):'<div class="empty">Отзывов пока нет. Клиент может оставить отзыв после завершённой встречи.</div>');
+  const reviewFilter = adminFilters['review-filter'];
+  const reviews = isAdmin && reviewFilter !== 'all' ? data.reviews.filter(review => review.status === reviewFilter) : data.reviews;
+  root.innerHTML=`<h2>${isAdmin?'Отзывы и модерация':'Мои отзывы'}</h2>` +
+   (isAdmin ? adminFilter('review-filter', 'Статус отзыва',
+    [['pending','На модерации'],['approved','Опубликованные'],['rejected','Отклонённые'],['all','Все']]) : '') +
+   (reviews.length?reviews.map(r=>`<article class="review panel"><div><strong>${esc(r.specialist)}</strong><span class="stars">${'★'.repeat(r.rating)}</span></div><p>${esc(r.content)}</p><small>${esc(r.author)} · ${date(r.created_at)} · ${reviewStatuses[r.status]}</small>${isAdmin?`<div class="dialog-actions"><button data-moderate="${r.id}" data-status="approved" class="button pale" ${r.status==='approved'?'disabled':''}>Опубликовать</button><button data-moderate="${r.id}" data-status="rejected" class="button outline" ${r.status==='rejected'?'disabled':''}>Отклонить</button></div>`:''}</article>`).join(''): `<div class="empty">${isAdmin ? 'Отзывов с этим статусом нет.' : 'Отзывов пока нет. Клиент может оставить отзыв после завершённой встречи.'}</div>`);
+  if (isAdmin) bindAdminFilter(root, 'review-filter');
   $$('[data-moderate]').forEach(b=>b.onclick=async()=>{try{await api('/admin/moderate',{kind:'review',id:Number(b.dataset.moderate),status:b.dataset.status});await refreshCatalog();await dashboard();toast('Статус отзыва обновлён');}catch(e){toast(e.message);}});
  }else if(dashboardTab==='schedule'||dashboardTab==='services'){
   const m=section;
@@ -446,8 +473,30 @@ async function renderDashboard(background) {
    }
   });
  }else if(dashboardTab==='people'){
-  const a=section;
-  root.innerHTML='<h2>Специалисты и услуги</h2><p class="muted">Скрытые специалисты и услуги недоступны для новых записей. Существующие записи сохраняются.</p>'+a.specialists.map(s=>`<article class="panel admin-person"><div class="service-row"><div><h3>${esc(s.name)}</h3><p>${esc(s.profession)} · ${s.active?'В каталоге':'Скрыт'}</p></div><button class="button ${s.active?'outline':'pale'}" data-toggle="specialist" data-id="${s.id}" data-active="${!s.active}">${s.active?'Скрыть':'Показать'}</button></div>${a.services.filter(v=>v.specialist_id===s.id).map(v=>`<div class="admin-service"><span>${esc(v.title)} · ${money(v.price)} · ${serviceStatus[v.moderation_status]}</span><button class="text-button" data-toggle="service" data-id="${v.id}" data-active="${!v.active}">${v.active?'Скрыть услугу':'Показать услугу'}</button></div>`).join('')}</article>`).join('');
+  const serviceFilter = adminFilters['service-visibility'];
+  const services = section.services.filter(service => matchesVisibility(service, serviceFilter));
+  const specialists = section.specialists.filter(specialist =>
+   matchesVisibility(specialist, adminFilters['specialist-visibility']) &&
+   (serviceFilter === 'all' || services.some(service => service.specialist_id === specialist.id)));
+  root.innerHTML = '<h2>Специалисты и услуги</h2><p class="muted">Скрытые специалисты и услуги недоступны для новых записей. Существующие записи сохраняются.</p>' +
+   adminFilter('specialist-visibility', 'Видимость специалистов', visibilityOptions) +
+   adminFilter('service-visibility', 'Видимость услуг', visibilityOptions) +
+   (specialists.length ? specialists.map(specialist => `
+    <article class="panel admin-person">
+     <div class="service-row">
+      <div><h3>${esc(specialist.name)}</h3><p>${esc(specialist.profession)} · ${specialist.active ? 'В каталоге' : 'Скрыт'}</p></div>
+      <button class="button ${specialist.active ? 'outline' : 'pale'}" data-toggle="specialist"
+       data-id="${specialist.id}" data-active="${!specialist.active}">${specialist.active ? 'Скрыть' : 'Показать'}</button>
+     </div>
+     ${services.filter(service => service.specialist_id === specialist.id).map(service => `
+      <div class="admin-service">
+       <span>${esc(service.title)} · ${money(service.price)} · ${serviceStatus[service.moderation_status]}</span>
+       <button class="text-button" data-toggle="service" data-id="${service.id}"
+        data-active="${!service.active}">${service.active ? 'Скрыть услугу' : 'Показать услугу'}</button>
+      </div>`).join('')}
+    </article>`).join('') : '<div class="empty">По выбранным фильтрам ничего не найдено.</div>');
+  bindAdminFilter(root, 'specialist-visibility');
+  bindAdminFilter(root, 'service-visibility');
   $$('[data-toggle]').forEach(b=>b.onclick=async()=>{try{await api('/admin/moderate',{kind:b.dataset.toggle,id:Number(b.dataset.id),active:b.dataset.active==='true'});await refreshCatalog();await dashboard();toast('Изменения сохранены');}catch(e){toast(e.message);}});
  }
  for (const form of $$('form', root)) {
