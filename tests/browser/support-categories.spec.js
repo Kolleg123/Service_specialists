@@ -26,6 +26,12 @@ test('support suggestion, live catalog changes, moderation and confirmed transfe
  try {
   await Promise.all([admin.clock.install(), master.clock.install(), observer.clock.install()]);
   await Promise.all([login(admin, 'Администратор'), login(master, 'Мастер'), observer.goto('/')]);
+  await admin.setViewportSize({width: 850, height: 900});
+  const tabs = admin.locator('.dashboard-tabs');
+  expect(await tabs.evaluate(element => ({
+   fits: element.scrollWidth === element.clientWidth,
+   wraps: new Set([...element.children].map(tab => tab.offsetTop)).size > 1
+  }))).toEqual({fits: true, wraps: true});
   await admin.getByRole('button', {name: 'Обращения', exact: true}).click();
   await expect(admin.locator('#support-status')).toHaveValue('pending');
 
@@ -48,6 +54,8 @@ test('support suggestion, live catalog changes, moderation and confirmed transfe
   await admin.getByRole('button', {name: 'Открыть обращение'}).click();
   const ticket = admin.locator('details[data-support-id]').filter({hasText: 'Предложение новой категории'});
   await expect(ticket).toHaveAttribute('open', '');
+  expect((await ticket.innerText()).match(/master@svobodno\.demo/g)).toHaveLength(1);
+  await expect(ticket).not.toContainText('Категории услуг');
   const id = await ticket.getAttribute('data-support-id');
   expect((await post(admin, `/support/${id}/resolve`, {response: '  '})).status()).toBe(400);
   await ticket.getByRole('button', {name: 'Ответить', exact: true}).click();
@@ -61,7 +69,7 @@ test('support suggestion, live catalog changes, moderation and confirmed transfe
   await expect(adminInbox.locator('summary').first()).toContainText('Предложение новой категории');
   await expect(adminInbox.locator('summary').last()).toContainText('Уточнение');
   await expect(ticket.getByLabel('Ответ администратора')).toHaveValue('Добавили категорию в справочник.');
-  await ticket.getByRole('button', {name: 'Категории услуг'}).click();
+  await admin.getByRole('button', {name: 'Категории услуг', exact: true}).click();
 
   await admin.getByRole('button', {name: 'Добавить группу'}).click();
   await admin.locator('#category-editor').getByLabel('Название').fill('Домашние технологии');

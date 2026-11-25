@@ -13,10 +13,12 @@ const supportBadge = status => {
  return `<span class="badge ${style}">${label}</span>`;
 };
 
-function supportDetails(item, admin) {
- return `${admin ? `<p class="muted">${esc(item.sender_name)} · ${supportRoles[item.sender_role]} ·
-  ${esc(item.sender_email)} · № ${item.user_id}</p>` : ''}
-  <p class="support-text">${esc(item.description)}</p>
+function supportSender(item) {
+ return `${esc(item.sender_name)} · ${supportRoles[item.sender_role]} · ${esc(item.sender_email)}`;
+}
+
+function supportDetails(item) {
+ return `<p class="support-text">${esc(item.description)}</p>
   ${item.response ? `<h3>Ответ администратора</h3>
    <p class="muted">${esc(item.admin_name)} · ${supportDate(item.resolved_at)}</p>
    <p class="support-text">${esc(item.response)}</p>` : ''}`;
@@ -65,7 +67,8 @@ function showSupportForm(title = '', serviceForm = null) {
 
 function openSupportFromNotice(item, admin) {
  modal(`<h2>${esc(item.title)}</h2><p>${supportBadge(item.status)} · ${supportDate(item.created_at)}</p>
-  ${supportDetails(item, admin)}<button id="support-go" class="button">Открыть обращение</button>`);
+  ${admin ? `<p class="muted">${supportSender(item)} · № ${item.user_id}</p>` : ''}
+  ${supportDetails(item)}<button id="support-go" class="button">Открыть обращение</button>`);
  $('#support-go').onclick = async () => {
   supportView.status = 'all';
   supportView.open.add(item.id);
@@ -140,10 +143,8 @@ function supportRow(item, admin) {
   else supportView.open.delete(item.id);
  };
  row.innerHTML = `<summary><strong>${esc(item.title)}</strong> ${supportBadge(item.status)}
-  <span class="muted support-meta">${admin ? `${esc(item.sender_name)} · ${supportRoles[item.sender_role]} ·
-   ${esc(item.sender_email)} · ` : ''}${supportDate(item.created_at)}</span></summary>
-  ${supportDetails(item, admin)}
-  ${admin ? '<button data-category-jump class="text-button">Категории услуг</button>' : ''}
+  <span class="muted support-meta">${admin ? `${supportSender(item)} · ` : ''}${supportDate(item.created_at)}</span></summary>
+  ${supportDetails(item)}
   ${item.status === 'pending' ? (admin ? `
    <button class="button pale" data-show-response>Ответить</button>
    <form hidden><label class="field">Ответ администратора<textarea name="response" maxlength="3000" required></textarea></label>
@@ -151,12 +152,6 @@ function supportRow(item, admin) {
      <button class="button outline" type="button" data-discard-response>Отмена</button></div>
     <p class="form-error" role="alert"></p></form>` :
    '<button class="button outline" data-withdraw>Отозвать обращение</button>') : ''}`;
- if (admin) {
-  $('[data-category-jump]', row).onclick = () => {
-   dashboardTab = 'categories';
-   dashboard().catch(error => toast(error.message));
-  };
- }
  if (item.status !== 'pending') {
   supportView.drafts.delete(item.id);
   return row;
