@@ -1,5 +1,6 @@
 from concurrent.futures import ThreadPoolExecutor
 from datetime import timedelta
+import io
 import sqlite3
 
 import pytest
@@ -237,3 +238,66 @@ def test_confirmation_snapshot_is_checked_atomically(app, field, value):
     slot = c.get('/api/slots/1').json['slots'][0]
     r = post(c, '/bookings', {'slot_id': slot['id'], 'address': 'Киров, Ленина 10', field: value})
     assert r.status_code == 409 and 'Условия записи изменились' in r.json['error']
+
+
+def test_profile_edit_name_and_password(app):
+    c = client(app)
+    result = post(c, '/profile', {
+        'name': 'Новое Имя',
+        'current_password': 'Demo2026!',
+        'new_password': 'NewPassword123',
+        'confirmation': 'NewPassword123',
+    })
+    assert result.status_code == 200
+    assert result.json['user']['name'] == 'Новое Имя'
+    assert post(c, '/logout', {}).status_code == 200
+    token = c.get('/api/session').json['csrf']
+    login = c.post('/api/login', json={'email': 'client@svobodno.demo', 'password': 'NewPassword123'},
+                   headers={'X-CSRF-Token': token})
+    assert login.status_code == 200
+    assert login.json['user']['name'] == 'Новое Имя'
+
+
+def test_profile_avatar_upload_and_replace(app):
+    c = client(app)
+    token = c.get('/api/session').json['csrf']
+    first = c.post('/api/profile/avatar', data={'avatar': (io.BytesIO(b'\xff\xd8\xfffake-jpg'), 'avatar.jpg')},
+                   headers={'X-CSRF-Token': token}, content_type='multipart/form-data')
+    assert first.status_code == 200
+    first_avatar = first.json['user']['avatar']
+    assert first_avatar.startswith('/uploads/user-')
+    second = c.get(first_avatar)
+    assert second.status_code == 200
+    assert second.data.startswith(b'\xff\xd8\xff')
+    token = c.get('/api/session').json['csrf']
+    replaced = c.post('/api/profile/avatar', data={'avatar': (io.BytesIO(b'\x89PNG\r\n\x1a\nnew'), 'avatar.png')},
+                      headers={'X-CSRF-Token': token}, content_type='multipart/form-data')
+    assert replaced.status_code == 200
+    assert replaced.json['user']['avatar'] != first_avatar
+    assert c.get(first_avatar).status_code == 404
+
+
+def test_account_deletion_requires_no_future_bookings_and_removes_client(app):
+    c = client(app)
+    result = c.delete('/api/account', headers={'X-CSRF-Token': c.get('/api/session').json['csrf']})
+    assert result.status_code == 409
+    assert 'предстоящие' in result.json['error']
+    slot = c.get('/api/slots/1').json['slots'][0]
+    booking = post(c, '/bookings', {'slot_id': slot['id'], 'address': 'Киров, Ленина 10'})
+    assert booking.status_code == 201
+    assert post(c, f"/bookings/{booking.json['id']}/cancel", {}).status_code == 200
+    deleted = c.delete('/api/account', headers={'X-CSRF-Token': c.get('/api/session').json['csrf']})
+    assert deleted.status_code == 200
+    assert deleted.json['user'] is None
+    assert c.get('/api/dashboard').status_code == 401
+
+
+def test_profile_rejects_wrong_current_password(app):
+    c = client(app)
+    result = post(c, '/profile', {
+        'name': 'Новое Имя',
+        'current_password': 'wrong',
+        'new_password': 'NewPassword123',
+        'confirmation': 'NewPassword123',
+    })
+    assert result.status_code == 403
