@@ -280,12 +280,13 @@ def test_profile_avatar_upload_and_replace(app):
 
 def test_account_deletion_requires_no_future_bookings_and_removes_client(app):
     c = client(app)
-    result = c.delete('/api/account', headers={'X-CSRF-Token': c.get('/api/session').json['csrf']})
-    assert result.status_code == 409
-    assert 'предстоящие' in result.json['error']
     slot = c.get('/api/slots/1').json['slots'][0]
     booking = post(c, '/bookings', {'slot_id': slot['id'], 'address': 'Киров, Ленина 10'})
     assert booking.status_code == 201
+    token = c.get('/api/session').json['csrf']
+    result = c.delete('/api/account', headers={'X-CSRF-Token': token})
+    assert result.status_code == 409
+    assert 'предстоящие' in result.json['error']
     assert post(c, f"/bookings/{booking.json['id']}/cancel", {}).status_code == 200
     deleted = c.delete('/api/account', headers={'X-CSRF-Token': c.get('/api/session').json['csrf']})
     assert deleted.status_code == 200
