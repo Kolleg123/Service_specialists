@@ -116,7 +116,7 @@ def test_dangling_specialist_relations_are_ignored_without_server_errors(tmp_pat
     master = client(app, "master")
     result = master.get("/api/master")
     assert result.status_code == 200
-    assert result.json == {"services": [], "slots": []}
+    assert result.json == {"services": [], "categories": [{"id": 1, "name": "Дом и ремонт"}, {"id": 2, "name": "Красота"}, {"id": 3, "name": "Обучение"}, {"id": 4, "name": "Здоровье"}, {"id": 5, "name": "Мероприятия"}], "slots": []}
 
     # A booking whose joined specialist no longer exists is not rendered as a
     # broken dashboard row; the endpoint remains available.
