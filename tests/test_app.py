@@ -304,3 +304,20 @@ def test_profile_rejects_wrong_current_password(app):
         'confirmation': 'NewPassword123',
     }, headers={'X-CSRF-Token': token})
     assert result.status_code == 403
+
+def test_specialist_can_delete_own_account(app):
+    c = client(app, 'master')
+    result = c.delete('/api/account', headers={'X-CSRF-Token': c.get('/api/session').json['csrf']})
+    assert result.status_code == 200
+    assert result.json['user'] is None
+    assert c.get('/api/dashboard').status_code == 401
+    assert not c.get('/api/catalog').json['specialists'][0]['name'] == 'Алексей Морозов'
+
+
+def test_admin_can_delete_specialist(app):
+    admin = client(app, 'admin')
+    result = admin.delete('/api/admin/specialists/2', headers={'X-CSRF-Token': admin.get('/api/session').json['csrf']})
+    assert result.status_code == 200
+    assert 2 not in [s['id'] for s in admin.get('/api/admin').json['specialists']]
+    assert 2 not in [s['id'] for s in admin.get('/api/catalog').json['specialists']]
+    assert admin.delete('/api/admin/specialists/9999', headers={'X-CSRF-Token': admin.get('/api/session').json['csrf']}).status_code == 404
