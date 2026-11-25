@@ -10,7 +10,7 @@ MESSAGES = {
 
 
 def notify_booking(connection, booking_id, event, current_time):
-    booking = connection.execute('''SELECT b.user_id,s.specialist_id,s.starts_at,s.booking_mode,v.title
+    booking = connection.execute('''SELECT b.user_id,b.cancel_reason,s.specialist_id,s.starts_at,s.booking_mode,v.title
         FROM bookings b JOIN slots s ON s.id=b.slot_id
         JOIN services v ON v.id=s.service_id WHERE b.id=?''', (booking_id,)).fetchone()
     client_message, master_message = MESSAGES[event]
@@ -23,8 +23,11 @@ def notify_booking(connection, booking_id, event, current_time):
 
     starts = datetime.fromisoformat(booking['starts_at'])
     when = f'{starts:%d.%m.%Y}' if booking['booking_mode'] == 'day' else f'{starts:%d.%m.%Y %H:%M}'
+    details = f" — {booking['title']}, {when}"
+    if event == 'cancelled' and booking['cancel_reason']:
+        details += f". Причина: {booking['cancel_reason']}"
     created_at = current_time.isoformat(timespec='seconds')
     connection.executemany('''INSERT INTO notifications(user_id,booking_id,event,message,created_at)
         VALUES(?,?,?,?,?) ON CONFLICT(user_id,booking_id,event) DO NOTHING''',
-        [(user_id, booking_id, event, f"{message} — {booking['title']}, {when}",
+        [(user_id, booking_id, event, message + details,
           created_at) for user_id, message in recipients])

@@ -51,13 +51,21 @@ function renderSpecialistApplication(root, application, user, categories) {
  };
 }
 
+let specialistApplicationFilter = 'pending';
+
 function renderSpecialistApplications(root, applications) {
  const fields = [...applicationTextFields, ['category', 'Категория'], ['experience', 'Опыт работы, полных лет']];
- root.innerHTML = '<h2>Заявки специалистов</h2>' + (applications.length ? applications.map(application => `
-  <article class="panel">
-   <h3>${esc(application.name)} · ${serviceStatus[application.status]}</h3>
-   <p>Аккаунт: ${esc(application.account_name)} · ${esc(application.email)}</p>
-   <p>Подана ${date(application.created_at)} · ${time(application.created_at)}</p>
+ const filtered = applications.filter(application => specialistApplicationFilter === 'all' ||
+  application.status === specialistApplicationFilter);
+ root.innerHTML = `<h2>Заявки специалистов</h2><label class="field">Статус заявки
+  <select id="specialist-application-filter">
+   <option value="pending">На проверке</option><option value="approved">Одобренные</option>
+   <option value="rejected">Отклонённые</option><option value="all">Все</option>
+  </select></label>` + (filtered.length ? filtered.map(application => `
+  <details class="panel">
+   <summary><strong>${esc(application.name)} · ${serviceStatus[application.status]}</strong>
+    · ${esc(application.account_name)} · ${esc(application.email)}
+    · ${date(application.created_at)} ${time(application.created_at)}</summary>
    <dl>${fields.map(([key, label]) => `<dt><strong>${label}</strong></dt><dd>${esc(application[key])}</dd>`).join('')}</dl>
    ${application.reason ? `<p>Причина отклонения: ${esc(application.reason)}</p>` : ''}
    ${application.status === 'pending' ? `
@@ -69,7 +77,15 @@ function renderSpecialistApplications(root, applications) {
      </div>
      <p class="form-error" role="alert"></p>
     </form>` : ''}
-  </article>`).join('') : '<p class="empty">Заявок пока нет.</p>');
+  </details>`).join('') : '<p class="empty">Заявок пока нет.</p>');
+
+ const filter = $('#specialist-application-filter', root);
+ filter.value = specialistApplicationFilter;
+ filter.onchange = () => {
+  specialistApplicationFilter = filter.value;
+  renderSpecialistApplications(root, applications);
+  $('#specialist-application-filter', root).focus();
+ };
 
  $$('form[data-application-id]', root).forEach(form => form.onsubmit = async event => {
   event.preventDefault();

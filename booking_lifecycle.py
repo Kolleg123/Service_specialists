@@ -44,10 +44,33 @@ def booking_policy(booking, user, current_time, has_review=False):
             'action_reasons': reasons}
 
 
-def transition_booking(connection, user, booking_id, action, clock):
+def cancellation_reason(data):
+    reason = data.get('reason', '')
+    if not isinstance(reason, str) or len(reason.strip()) > 500:
+        raise BookingError('Причина отмены должна содержать не более 500 символов')
+    return reason.strip() or None
+
+
+def upcoming_master_bookings(connection, user, current_time):
+    rows = connection.execute("""SELECT b.id,s.starts_at FROM bookings b JOIN slots s ON s.id=b.slot_id
+        WHERE s.specialist_id=? AND b.status='confirmed' ORDER BY b.id""", (user['specialist_id'],))
+    return [row['id'] for row in rows if parse_start(row['starts_at']) > current_time]
+
+
+def store_transition(connection, booking_id, target, current_time, reason=None):
+    changed = connection.execute("""UPDATE bookings SET status=?,cancel_reason=?
+        WHERE id=? AND status='confirmed'""", (target, reason, booking_id)).rowcount
+    if changed != 1:
+        raise BookingError('Статус записи изменился. Обновите список.', 409)
+    notify_booking(connection, booking_id, target, current_time)
+
+
+def transition_booking(connection, user, booking_id, action, clock, reason=None):
     # Reading status and updating it must be one serialized transaction, including
     # duplicate or concurrent requests. Terminal states are never reopened.
     connection.execute('BEGIN IMMEDIATE')
+    if not 1 <= booking_id < 2**63:
+        raise BookingError('Запись не найдена', 404)
     booking = connection.execute('''SELECT b.*,s.starts_at,s.ends_at slot_ends_at,s.specialist_id,v.duration
         FROM bookings b JOIN slots s ON s.id=b.slot_id
         JOIN services v ON v.id=s.service_id WHERE b.id=?''', (booking_id,)).fetchone()
@@ -70,8 +93,6 @@ def transition_booking(connection, user, booking_id, action, clock):
         reason = policy['action_reasons'].get(action, 'Можно отменить только предстоящую активную запись.')
         raise BookingError(reason, 409)
     target = 'completed' if action == 'complete' else 'cancelled'
-    changed = connection.execute("UPDATE bookings SET status=? WHERE id=? AND status='confirmed'",
-                                 (target, booking_id)).rowcount
-    if changed != 1:
-        raise BookingError('Статус записи изменился. Обновите список.', 409)
-    notify_booking(connection, booking_id, target, current_time)
+    if not (action == 'cancel' and user['role'] == 'master' and user['specialist_id'] == booking['specialist_id']):
+        reason = None
+    store_transition(connection, booking_id, target, current_time, reason)

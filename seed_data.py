@@ -74,7 +74,6 @@ CREATE TABLE notifications(
             AND event IN ('specialist_approved','specialist_rejected'))
     ),
     UNIQUE(user_id,booking_id,event),
-    UNIQUE(user_id,service_id),
     UNIQUE(user_id,specialist_application_id)
 )
 """
@@ -88,15 +87,31 @@ def migrate_service_moderation(connection):
     if 'moderation_reason' not in columns:
         connection.execute('ALTER TABLE services ADD COLUMN moderation_reason TEXT')
 
+    for name, definition in (
+        ('deleted', 'INTEGER NOT NULL DEFAULT 0'),
+        ('draft', 'TEXT'),
+        ('draft_status', 'TEXT'),
+        ('draft_reason', 'TEXT'),
+        ('revision', 'INTEGER NOT NULL DEFAULT 0'),
+    ):
+        if name not in columns:
+            connection.execute(f'ALTER TABLE services ADD COLUMN {name} {definition}')
+    booking_columns = {row['name'] for row in connection.execute('PRAGMA table_info(bookings)')}
+    if 'cancel_reason' not in booking_columns:
+        connection.execute('ALTER TABLE bookings ADD COLUMN cancel_reason TEXT')
+
 
 def migrate_notifications(connection):
     columns = {row['name'] for row in connection.execute('PRAGMA table_info(notifications)')}
-    if columns and 'specialist_application_id' not in columns:
+    schema = connection.execute("SELECT sql FROM sqlite_master WHERE name='notifications'").fetchone()
+    if columns and ('specialist_application_id' not in columns or
+                    'UNIQUE(user_id,service_id)' in schema['sql']):
         connection.execute('ALTER TABLE notifications RENAME TO previous_notifications')
         connection.execute(NOTIFICATIONS_TABLE)
         fields = 'id,user_id,booking_id,event,message,created_at,is_read'
-        if 'service_id' in columns:
-            fields += ',service_id'
+        for field in ('service_id', 'specialist_application_id'):
+            if field in columns:
+                fields += ',' + field
         connection.execute(f"INSERT INTO notifications({fields}) SELECT {fields} FROM previous_notifications")
         connection.execute('DROP TABLE previous_notifications')
     elif not columns:

@@ -89,45 +89,70 @@ function login(after=null,register=false) {
  $('#auth-switch').onclick=()=>login(after,!register);
  $('#forgot-password')?.addEventListener('click',requestPasswordReset);
 }
+let notificationTimer;
+const notificationRequests = new Map();
+let refreshNotifications;
+
+function stopNotificationPolling() {
+ clearInterval(notificationTimer);
+ refreshNotifications = null;
+}
+
+document.addEventListener('visibilitychange', () => {
+ if (!document.hidden) refreshNotifications?.();
+});
+window.addEventListener('online', () => refreshNotifications?.());
+
 function bindNotifications(user) {
+ stopNotificationPolling();
  const toggle=$('#notifications-toggle'), panel=$('#notifications-panel');
  const count=$('.notification-count',toggle);
+ const sessionToken = state.csrf;
  const isCurrent=()=>panel.isConnected && state.user===user && location.hash==='#dashboard';
  let notifications=[];
  let busy=false;
+ let loaded=false;
+ let snapshot;
 
  function render() {
   const unread=notifications.filter(n=>!n.is_read).length;
   count.textContent=unread;
   count.classList.toggle('hidden',!unread);
   toggle.setAttribute('aria-label',unread?`Уведомления, непрочитанных: ${unread}`:'Уведомления');
+  const scroll = $('.notification-list',panel)?.scrollTop ?? 0;
   panel.innerHTML=`<div class="notification-panel-head">
    <div><strong>Уведомления</strong><span role="status">${unread?`Непрочитанных: ${unread}`:'Непрочитанных нет'}</span></div>
    <button id="notifications-mark-read" class="text-button" ${unread?'':'disabled'}>Прочитать всё</button>
   </div><div class="notification-list">${notifications.length?notifications.map(n=>`
    <article class="notification-item ${n.is_read?'read':'unread'}">
     <span class="notification-dot ${['cancelled','service_rejected','specialist_rejected'].includes(n.event)?'warning':'success'}" aria-hidden="true"></span>
-    <div class="notification-copy"><strong>${esc(n.message)}</strong>
+    <div class="notification-copy"><button class="text-button" data-open-notification="${n.id}"><strong>${esc(n.message)}</strong></button>
      <small>${date(n.created_at.slice(0,10)+'T12:00:00')} · ${time(n.created_at)} (Киров)</small>
      ${n.is_read?'<small>Прочитано</small>':`<button class="text-button" data-read-notification="${esc(n.id)}">Отметить прочитанным</button>`}
     </div>
    </article>`).join(''):'<p class="notification-status">Уведомлений пока нет.</p>'}</div>`;
+  $('.notification-list',panel).scrollTop = scroll;
  }
 
  async function load() {
-  if(busy)return;
+  if(busy || document.hidden || !isCurrent()) return;
   busy=true;
-  panel.innerHTML='<p class="notification-status" role="status">Загружаем уведомления…</p>';
   try {
-   const result=await api('/notifications');
-   if(!isCurrent())return;
-   notifications=result.notifications;
-   render();
-  } catch(error) {
-   if(isCurrent()){
-    panel.innerHTML='<p class="notification-status" role="status"></p>';
-    $('p',panel).textContent=error.message;
+   if (!notificationRequests.has(sessionToken)) {
+    notificationRequests.set(sessionToken,
+     api('/notifications').finally(() => notificationRequests.delete(sessionToken)));
    }
+   const result = await notificationRequests.get(sessionToken);
+   if (!isCurrent()) return;
+   const next = JSON.stringify(result.notifications);
+   if (!loaded || snapshot !== next) {
+    notifications = result.notifications;
+    snapshot = next;
+    render();
+   }
+   loaded = true;
+  } catch(error) {
+   if (isCurrent() && !loaded) panel.textContent = error.message;
   } finally {busy=false;}
  }
 
@@ -148,7 +173,24 @@ function bindNotifications(user) {
  };
  panel.onclick=async event=>{
   const button=event.target.closest('button');
-  if(!button||busy)return;
+  if (!button || button.disabled) return;
+  if (button.dataset.openNotification) {
+   button.disabled = true;
+   try {
+    const result = await api('/notifications/' + button.dataset.openNotification + '/open', {});
+    if (!isCurrent()) return;
+    setOpen(false);
+    openNotificationDetails(result);
+    await notificationRequests.get(sessionToken)?.catch(() => {});
+    await load();
+   } catch (error) {
+    toast(error.message);
+   } finally {
+    button.disabled = false;
+   }
+   return;
+  }
+  if (busy) return;
   const items=notifications.filter(n=>!n.is_read &&
    (button.id==='notifications-mark-read'||String(n.id)===button.dataset.readNotification));
   if(!items.length)return;
@@ -166,6 +208,8 @@ function bindNotifications(user) {
    if(!panel.classList.contains('hidden'))toggle.focus();
   } finally {busy=false;}
  };
+ refreshNotifications = load;
+ notificationTimer = setInterval(load, 10000);
  load();
 }
 
@@ -182,7 +226,7 @@ function scheduleDashboardRefresh() {
  dashboardRefreshTimer = setTimeout(async () => {
   if (location.hash !== '#dashboard' || dashboardTab !== 'bookings' || !state.user) return;
   // Do not destroy an open dialog, filter selection or keyboard focus.
-  if (document.hidden || $('#modal').open || $('.dashboard')?.contains(document.activeElement)) {
+  if (document.hidden || $('#modal').open || $('#notifications-toggle')?.getAttribute('aria-expanded') === 'true' || $('.dashboard')?.contains(document.activeElement)) {
    scheduleDashboardRefresh(); return;
   }
   try { await dashboard(); } catch (error) { toast(error.message); scheduleDashboardRefresh(); }
@@ -215,7 +259,7 @@ async function dashboard() {
  if(!tabs.some(x=>x[0]===dashboardTab))dashboardTab='bookings';
  const notificationControl=isAdmin?'':`<div class="notification-control"><button id="notifications-toggle" class="button outline notification-trigger" aria-label="Уведомления" aria-expanded="false" aria-controls="notifications-panel"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 9a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9M10 21h4"/></svg><span>Уведомления</span><span class="notification-count hidden" aria-hidden="true"></span></button><div id="notifications-panel" class="notification-panel hidden" aria-label="Список уведомлений"></div></div>`;
  $('#app').innerHTML=`<section class="dashboard"><div class="dashboard-heading"><div><span class="eyebrow">${isClient?'ЛИЧНЫЙ КАБИНЕТ':isMaster?'КАБИНЕТ СПЕЦИАЛИСТА':'АДМИНИСТРИРОВАНИЕ'}</span><h1>Здравствуйте, ${esc(user.name.split(' ')[0])}<span class="wave">✧</span></h1><p class="muted">${isClient?'Встречи, которые делают жизнь проще.':isMaster?'Ваше время, ваши услуги и ваши клиенты.':'Управляйте качеством сервиса и публикациями.'}</p></div><div class="dashboard-actions">${modeControl}${notificationControl}<button id="logout" class="button outline">Выйти ↗</button></div></div><div class="stats"><div><span>${isClient?'Предстоящих встреч':'Активных записей'}</span><strong>${data.bookings.filter(b=>isClient?b.phase==='upcoming':b.status==='confirmed').length}</strong></div><div><span>Завершённых встреч</span><strong>${data.bookings.filter(b=>b.status==='completed').length}</strong></div><div><span>${isAdmin?'На модерации':'Всего записей'}</span><strong>${isAdmin?data.reviews.filter(r=>r.status==='pending').length:data.bookings.length}</strong></div></div><div class="dashboard-tabs">${tabs.map(([id,t])=>`<button data-tab="${id}" class="${dashboardTab===id?'selected':''}">${t}</button>`).join('')}</div><div id="dashboard-content"></div></section>`;
- $('#logout').onclick=async()=>{const r=await api('/logout',{});state.user=null;state.csrf=r.csrf;dashboardMode='master';dashboardTab='bookings';dashboardStatusFilter='all';clearTimeout(dashboardRefreshTimer);updateAccount();location.hash='catalog';catalog();};
+ $('#logout').onclick=async()=>{const r=await api('/logout',{});stopNotificationPolling();state.user=null;state.csrf=r.csrf;specialistApplicationFilter='pending';dashboardMode='master';dashboardTab='bookings';dashboardStatusFilter='all';clearTimeout(dashboardRefreshTimer);updateAccount();location.hash='catalog';catalog();};
  if (hasSpecialistProfile) $('#dashboard-mode').onchange=event=>{
   dashboardMode=event.target.value;
   dashboardTab='bookings';
@@ -226,13 +270,38 @@ async function dashboard() {
  if(!isAdmin)bindNotifications(user);
  const root=$('#dashboard-content');
  if(dashboardTab==='bookings'){
-  root.innerHTML=`<div class="section-title"><h2>${isClient?'Мои встречи':'История записей'}</h2><select id="booking-status" aria-label="Статус записи"><option value="all">Все записи</option><option value="confirmed">Активные</option><option value="completed">Завершённые</option><option value="cancelled">Отменённые</option></select></div><div class="dashboard-update"><p>Время Кирова · UTC+3. Статус и действия проверяет сервер.</p><button id="refresh-bookings" class="button outline">Обновить статусы</button><p id="dashboard-update-status" role="status"></p></div><div id="booking-list"></div>`;
+  root.innerHTML=`<div class="section-title"><h2>${isClient?'Мои встречи':'История записей'}</h2><select id="booking-status" aria-label="Статус записи"><option value="all">Все записи</option><option value="confirmed">Активные</option><option value="completed">Завершённые</option><option value="cancelled">Отменённые</option></select></div><div class="dashboard-update"><p>Время Кирова · UTC+3. Статус и действия проверяет сервер.</p><button id="refresh-bookings" class="button outline">Обновить статусы</button><p id="dashboard-update-status" role="status"></p></div>${isMaster ? '<button id="cancel-all-bookings" class="button outline">Отменить все предстоящие записи</button>' : ''}<div id="booking-list"></div>`;
+  if (isMaster) $('#cancel-all-bookings').onclick = async event => {
+   const button = event.currentTarget;
+   button.disabled = true;
+   try {
+    const {ids} = await api('/master/bookings/upcoming');
+    if (!button.isConnected) return;
+    if (!ids.length) return toast('Нет предстоящих записей для отмены');
+    managementConfirmation('Отменить все предстоящие записи?',
+     `Будет отменено записей: ${ids.length}. Клиенты получат уведомления, места освободятся.`,
+     true, async reason => {
+      const result = await api('/master/bookings/cancel-all', {confirm:true, ids, reason});
+      return `Отменено записей: ${result.cancelled}`;
+     });
+   } catch (error) {
+    toast(error.message);
+   } finally {
+    button.disabled = false;
+   }
+  };
   $('#booking-status').value=dashboardStatusFilter;
   $('#refresh-bookings').onclick=async()=>{try{await dashboard();$('#dashboard-update-status').textContent='Статусы обновлены';$('#refresh-bookings').focus();}catch(error){toast(error.message);}};
   const draw=()=>{
    const rows=data.bookings.filter(b=>$('#booking-status').value==='all'||b.status===$('#booking-status').value);
-   $('#booking-list').innerHTML=rows.length?rows.map(b=>`<article class="booking-row" data-booking-id="${b.id}"><img src="${esc(b.photo)}" alt=""><div class="booking-info"><span class="badge ${b.status} ${b.phase}">${esc(b.status_label)}</span><h3>${esc(b.service)}</h3><p>${esc(b.specialist)}${!isClient?' · Клиент: '+esc(b.client):''}</p><p><b>${date(b.starts_at)}${b.booking_mode==='day'?'':` · ${time(b.starts_at)}–${b.starts_at.slice(0,10)===b.ends_at.slice(0,10)?'':date(b.ends_at)+' · '}${time(b.ends_at)}`}</b> · ${b.duration} мин · ${b.mode} · ${b.quantity} мест(о)</p>${b.address?`<p>⌖ ${esc(b.address)}</p>`:''}${b.note?`<p class="muted">${esc(b.note)}</p>`:''}</div><div class="booking-actions">${bookingActions(b)}</div></article>`).join(''):'<div class="empty"><span>▦</span><h3>Здесь пока нет записей</h3><p>Выберите специалиста и удобное время в каталоге.</p><a class="button" href="#catalog">Найти специалиста ↗</a></div>';
-   $$('[data-cancel]').forEach(b=>b.onclick=()=>{modal('<h2>Отменить запись?</h2><p>Место освободится, и его смогут выбрать другие клиенты.</p><div class="dialog-actions"><button id="keep-booking" class="button outline">Оставить запись</button><button id="confirm-cancel" class="button">Да, отменить</button></div>');$('#keep-booking').onclick=closeModal;$('#confirm-cancel').onclick=async()=>{try{await api('/bookings/'+b.dataset.cancel+'/cancel',{});closeModal();toast('Запись отменена, место освобождено');await dashboard();}catch(e){toast(e.message);closeModal();await dashboard();}};});
+   $('#booking-list').innerHTML=rows.length?rows.map(b=>`<article class="booking-row" data-booking-id="${b.id}"><img src="${esc(b.photo)}" alt=""><div class="booking-info"><span class="badge ${b.status} ${b.phase}">${esc(b.status_label)}</span><h3>${esc(b.service)}</h3><p>${esc(b.specialist)}${!isClient?' · Клиент: '+esc(b.client):''}</p><p><b>${date(b.starts_at)}${b.booking_mode==='day'?'':` · ${time(b.starts_at)}–${b.starts_at.slice(0,10)===b.ends_at.slice(0,10)?'':date(b.ends_at)+' · '}${time(b.ends_at)}`}</b> · ${b.duration} мин · ${b.mode} · ${b.quantity} мест(о)</p>${b.address?`<p>⌖ ${esc(b.address)}</p>`:''}${b.note?`<p class="muted">${esc(b.note)}</p>`:''}${b.cancel_reason ? `<p>Причина отмены: ${esc(b.cancel_reason)}</p>` : ''}</div><div class="booking-actions">${bookingActions(b)}</div></article>`).join(''):'<div class="empty"><span>▦</span><h3>Здесь пока нет записей</h3><p>Выберите специалиста и удобное время в каталоге.</p><a class="button" href="#catalog">Найти специалиста ↗</a></div>';
+   $$('[data-cancel]').forEach(button => button.onclick = () => {
+    managementConfirmation('Отменить запись?', 'Место освободится, клиент получит уведомление.',
+     isMaster, async reason => {
+      await api('/bookings/' + button.dataset.cancel + '/cancel', {reason});
+      return 'Запись отменена, место освобождено';
+     });
+   });
    $$('[data-complete]').forEach(b=>b.onclick=async()=>{b.disabled=true;try{await api('/bookings/'+b.dataset.complete+'/complete',{});toast('Встреча завершена');}catch(e){toast(e.message);}finally{await dashboard();}});
    $$('[data-review]').forEach(b=>b.onclick=()=>reviewForm(Number(b.dataset.review)));
   };$('#booking-status').onchange=()=>{dashboardStatusFilter=$('#booking-status').value;draw();};draw();scheduleDashboardRefresh();
@@ -244,6 +313,7 @@ async function dashboard() {
   $$('[data-moderate]').forEach(b=>b.onclick=async()=>{try{await api('/admin/moderate',{kind:'review',id:Number(b.dataset.moderate),status:b.dataset.status});await refreshCatalog();await dashboard();toast('Статус отзыва обновлён');}catch(e){toast(e.message);}});
  }else if(dashboardTab==='schedule'||dashboardTab==='services'){
   const m=await api('/master');
+  if (requestId !== dashboardRequest || !root.isConnected) return;
   if(dashboardTab==='schedule'){
    root.innerHTML=`<div class="section-title"><div><h2>Свободные слоты</h2><p class="muted">Время Кирова (UTC+3). Пересекающиеся интервалы недоступны.</p></div></div><form id="slot-form" class="panel form-grid"><label class="field">Услуга<select name="service_id">${m.services.filter(s=>s.active).map(s=>`<option value="${s.id}" data-mode="${s.mode}">${esc(s.title)} · ${s.duration} мин</option>`).join('')}</select></label><label class="field">Дата и время<input type="datetime-local" name="starts_at" min="${localNow()}" required></label><label class="field">Количество мест<input type="number" name="capacity" min="1" max="50" value="1" required></label><button class="button">Добавить слот +</button><p class="form-error" role="alert"></p></form><div class="schedule-list">${m.slots.length?m.slots.map(s=>`<article class="schedule-row ${!s.active?'inactive':''}"><div><strong>${date(s.starts_at)} · ${time(s.starts_at)}</strong><p>${esc(s.service)}</p></div><span>${s.booked} / ${s.capacity} мест занято</span>${s.active?`<button data-close-slot="${s.id}" class="button outline">Закрыть слот</button>`:'<span class="muted">Закрыт</span>'}</article>`).join(''):'<div class="empty">Добавьте первый слот в своё расписание.</div>'}</div>`;
    root.insertAdjacentHTML('afterbegin', scheduleForm(m.schedule));
@@ -256,8 +326,7 @@ async function dashboard() {
    form.onsubmit=async e=>{e.preventDefault();const d=Object.fromEntries(new FormData(form));d.service_id=Number(d.service_id);d.capacity=Number(d.capacity);try{await api('/master/slots',d);await dashboard();toast('Слот добавлен');}catch(e){$('.form-error',form).textContent=e.message;}};
    $$('[data-close-slot]').forEach(b=>b.onclick=async()=>{try{await api('/master/slots/'+b.dataset.closeSlot+'/close',{});await dashboard();toast('Слот закрыт');}catch(e){toast(e.message);}});
   }else{
-   root.innerHTML=`<h2>Мои услуги</h2><div class="service-list">${m.services.map(s=>`<article class="panel service-row"><div><h3>${esc(s.title)}</h3><p>${s.mode} · ${s.duration} минут · ${serviceStatus[s.moderation_status]}${s.active?'':' · Скрыта'}</p>${s.moderation_reason?`<p>Причина отклонения: ${esc(s.moderation_reason)}</p>`:''}</div><strong>${money(s.price)}</strong></article>`).join('')}</div><h3>Добавить услугу</h3><form id="service-form" class="panel form-grid"><label class="field">Название<input name="title" minlength="3" maxlength="100" required></label><label class="field">Стоимость, ₽<input name="price" type="number" min="0" max="1000000" required></label><label class="field">Длительность, мин<input name="duration" type="number" min="15" max="480" value="60" required></label><label class="field">Формат<select name="mode">${['Выезд','У специалиста','Онлайн','Группа'].map(x=>`<option>${x}</option>`).join('')}</select></label><button class="button">Добавить услугу +</button><p class="form-error" role="alert"></p></form>`;
-   const form=$('#service-form');form.onsubmit=async e=>{e.preventDefault();const d=Object.fromEntries(new FormData(form));d.price=Number(d.price);d.duration=Number(d.duration);try{await api('/master/services',d);await refreshCatalog();await dashboard();toast('Услуга отправлена на проверку');}catch(e){$('.form-error',form).textContent=e.message;}};
+   renderManagedServices(root, m.services);
   }
  }else if(dashboardTab==='specialist-application'){
   renderSpecialistApplication(root, application, user, data.specialist_categories);
@@ -270,9 +339,9 @@ async function dashboard() {
   if (requestId !== dashboardRequest || !root.isConnected) return;
   root.innerHTML = '<h2>Заявки на услуги</h2>' + (applications.length ? applications.map(service => `
    <article class="panel">
-    <h3>${esc(service.title)}</h3>
+    <h3>${service.draft_status ? 'Изменения: ' : ''}${esc(service.title)}</h3>
     <p>${esc(service.specialist)} · ${esc(service.mode)} · ${service.duration} мин · ${money(service.price)}</p>
-    <form data-service-decision="${service.id}">
+    <form data-service-decision="${service.id}" data-revision="${service.revision}">
      <label class="field">Причина отклонения<textarea name="reason" maxlength="500"></textarea></label>
      <p class="form-error" role="alert"></p>
      <div class="dialog-actions">
@@ -289,7 +358,7 @@ async function dashboard() {
    buttons.forEach(button => button.disabled = true);
    try {
     await api(`/admin/service-applications/${form.dataset.serviceDecision}/decision`, {
-     status, reason: form.elements.reason.value
+     status, reason: form.elements.reason.value, revision: Number(form.dataset.revision)
     });
     await dashboard();
     toast('Решение сохранено');
@@ -313,6 +382,6 @@ $('#chat-form').onsubmit=async e=>{e.preventDefault();const input=$('#chat-input
 $('#modal-close').onclick=closeModal;
 $('#modal').onclick=e=>{if(e.target===$('#modal')){const r=$('#modal').getBoundingClientRect();if(e.clientX<r.left||e.clientX>r.right||e.clientY<r.top||e.clientY>r.bottom)closeModal();}};
 $('#account').onclick=()=>{if(state.user){location.hash='dashboard';dashboard().catch(e=>toast(e.message));}else login();};
-async function route(){const id=++catalogRequest;try{if(location.hash==='#dashboard'){await dashboard();}else{await refreshCatalog();if(id!==catalogRequest)return;catalog();if(location.hash==='#how')$('#how-section').scrollIntoView({behavior:'smooth'});}$$('[data-nav]').forEach(a=>a.classList.toggle('active',a.getAttribute('href')===(location.hash||'#catalog')));}catch(e){$('#chat').before(chatLauncher);$('#app').innerHTML=`<div class="empty" role="alert"><h2>Не удалось загрузить страницу</h2><p>${esc(e.message)}</p><button id="retry-page" class="button">Повторить загрузку</button></div>`;$('#retry-page').onclick=route;}}
+async function route(){const id=++catalogRequest;try{if(location.hash==='#dashboard'){await dashboard();}else{stopNotificationPolling();await refreshCatalog();if(id!==catalogRequest)return;catalog();if(location.hash==='#how')$('#how-section').scrollIntoView({behavior:'smooth'});}$$('[data-nav]').forEach(a=>a.classList.toggle('active',a.getAttribute('href')===(location.hash||'#catalog')));}catch(e){$('#chat').before(chatLauncher);$('#app').innerHTML=`<div class="empty" role="alert"><h2>Не удалось загрузить страницу</h2><p>${esc(e.message)}</p><button id="retry-page" class="button">Повторить загрузку</button></div>`;$('#retry-page').onclick=route;}}
 window.addEventListener('hashchange',route);
 (async()=>{try{const s=await api('/session');state.user=s.user;state.csrf=s.csrf;updateAccount();if(location.pathname==='/reset-password'){resetPasswordPage();}await route();}catch(e){$('#app').innerHTML=`<div class="empty"><h2>Не удалось загрузить приложение</h2><p>${esc(e.message)}</p><button class="button" onclick="location.reload()">Повторить</button></div>`;}})();

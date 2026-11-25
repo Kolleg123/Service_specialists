@@ -14,9 +14,11 @@ from flask import Flask, jsonify, request, session, send_from_directory
 from werkzeug.security import generate_password_hash, check_password_hash
 from booking_schedule import save_schedule, schedule_for
 from booking_service import BookingError, available_slots, create_booking
-from booking_lifecycle import CUSTOMER_ROLES, booking_interval, booking_policy, transition_booking
+from booking_lifecycle import (CUSTOMER_ROLES, booking_interval, booking_policy, cancellation_reason,
+                               store_transition, transition_booking, upcoming_master_bookings)
 from password_recovery import send_recovery_email
-from service_moderation import ModerationError, PUBLIC_SERVICE, decide_service
+from service_moderation import (ModerationError, PUBLIC_SERVICE, decide_service, manage_service,
+                                service_details, service_fields)
 from specialist_registration import decide_application, latest_application, submit_application
 
 load_dotenv()
@@ -287,6 +289,43 @@ def create_app(test_config=None):
             return fail('Уведомление не найдено', 404)
         return jsonify(ok=True)
 
+    @app.post('/api/notifications/<int:ident>/open')
+    @auth()
+    def open_notification(user, ident):
+        if not 1 <= ident < 2**63:
+            return fail('Уведомление не найдено', 404)
+        with db() as c:
+            notice = c.execute('SELECT * FROM notifications WHERE id=? AND user_id=?',
+                               (ident, user['id'])).fetchone()
+            if not notice:
+                return fail('Уведомление не найдено', 404)
+            c.execute('UPDATE notifications SET is_read=1 WHERE id=?', (ident,))
+            target = notification_target(c, notice, user)
+        return jsonify(message=notice['message'], target=target)
+
+    def notification_target(c, notice, user):
+        if notice['booking_id'] is not None:
+            row = c.execute("""SELECT b.id,b.user_id,b.status,b.cancel_reason,s.starts_at,s.booking_mode,
+                v.title,p.name specialist FROM bookings b JOIN slots s ON s.id=b.slot_id
+                JOIN services v ON v.id=s.service_id JOIN specialists p ON p.id=s.specialist_id
+                WHERE b.id=? AND (b.user_id=? OR s.specialist_id=?)""",
+                            (notice['booking_id'], user['id'],
+                             user['specialist_id'] if user['role'] == 'master' else None)).fetchone()
+            if row:
+                return dict(kind='booking', mode='client' if row['user_id'] == user['id'] else 'master',
+                            tab='bookings', item=dict(row))
+        elif notice['service_id'] is not None and user['role'] == 'master':
+            row = c.execute('SELECT * FROM services WHERE id=? AND specialist_id=? AND deleted=0',
+                            (notice['service_id'], user['specialist_id'])).fetchone()
+            if row:
+                return dict(kind='service', mode='master', tab='services', item=service_details(row))
+        elif notice['specialist_application_id'] is not None:
+            row = c.execute('SELECT * FROM specialist_applications WHERE id=? AND user_id=?',
+                            (notice['specialist_application_id'], user['id'])).fetchone()
+            if row:
+                return dict(kind='application', mode='client', tab='specialist-application', item=dict(row))
+        return None
+
     @app.get('/api/dashboard')
     @auth()
     def dashboard(user):
@@ -303,7 +342,7 @@ def create_app(test_config=None):
         with db() as c:
             application = latest_application(c, user['id']) if client_view else None
             bookings = c.execute(f'''SELECT b.*,s.starts_at,s.ends_at slot_ends_at,s.booking_mode,s.specialist_id,s.capacity,v.title service,v.mode,
-                CASE WHEN s.booking_mode='time' THEN ROUND((julianday(s.ends_at)-julianday(s.starts_at))*1440) ELSE v.duration END duration,p.name specialist,p.photo,u.name client
+                CASE WHEN s.ends_at IS NOT NULL AND s.booking_mode!='day' THEN ROUND((julianday(s.ends_at)-julianday(s.starts_at))*1440) ELSE v.duration END duration,p.name specialist,p.photo,u.name client
                 FROM bookings b JOIN slots s ON s.id=b.slot_id JOIN services v ON v.id=s.service_id
                 JOIN specialists p ON p.id=s.specialist_id JOIN users u ON u.id=b.user_id WHERE {where} ORDER BY s.starts_at DESC''', params).fetchall()
             searches = c.execute('SELECT * FROM searches WHERE user_id=? ORDER BY id DESC LIMIT 30', (user['id'],)).fetchall()
@@ -319,7 +358,8 @@ def create_app(test_config=None):
     def apply_booking_transition(user, ident, action):
         try:
             with db() as c:
-                transition_booking(c, user, ident, action, now)
+                reason = cancellation_reason(request.get_json()) if action == 'cancel' and user['role'] == 'master' else None
+                transition_booking(c, user, ident, action, now, reason)
         except BookingError as error:
             return fail(str(error), error.status)
         return jsonify(ok=True)
@@ -333,6 +373,38 @@ def create_app(test_config=None):
     @auth('master')
     def complete(user, ident):
         return apply_booking_transition(user, ident, 'complete')
+
+    @app.get('/api/master/bookings/upcoming')
+    @auth('master')
+    def upcoming_bookings(user):
+        try:
+            with db() as c:
+                return jsonify(ids=upcoming_master_bookings(c, user, now()))
+        except BookingError as error:
+            return fail(str(error), error.status)
+
+    @app.post('/api/master/bookings/cancel-all')
+    @auth('master')
+    def cancel_all_bookings(user):
+        data = request.get_json()
+        if data.get('confirm') is not True:
+            return fail('Подтвердите отмену записей')
+        expected_ids = data.get('ids')
+        if not isinstance(expected_ids, list) or any(type(ident) is not int for ident in expected_ids):
+            return fail('Укажите список записей для подтверждения')
+        try:
+            reason = cancellation_reason(data)
+            with db() as c:
+                c.execute('BEGIN IMMEDIATE')
+                current_time = now()
+                ids = upcoming_master_bookings(c, user, current_time)
+                if expected_ids != ids:
+                    return fail('Список предстоящих записей изменился. Откройте подтверждение заново.', 409)
+                for ident in ids:
+                    store_transition(c, ident, 'cancelled', current_time, reason)
+        except BookingError as error:
+            return fail(str(error), error.status)
+        return jsonify(cancelled=len(ids))
 
     @app.post('/api/reviews')
     @auth(*CUSTOMER_ROLES)
@@ -391,11 +463,14 @@ def create_app(test_config=None):
     @auth('master')
     def master(user):
         with db() as c:
-            services = c.execute('SELECT * FROM services WHERE specialist_id=?', (user['specialist_id'],)).fetchall()
+            services = c.execute('''SELECT v.*, (SELECT count(*) FROM bookings b JOIN slots s ON s.id=b.slot_id
+                WHERE s.service_id=v.id AND b.status='confirmed' AND s.starts_at>?) upcoming_count
+                FROM services v WHERE v.specialist_id=? AND v.deleted=0''',
+                                 (now().isoformat(timespec='minutes'), user['specialist_id'])).fetchall()
             slots = c.execute('''SELECT s.*,v.title service,COALESCE((SELECT SUM(quantity) FROM bookings WHERE slot_id=s.id AND status='confirmed'),0) booked
-                FROM slots s JOIN services v ON v.id=s.service_id WHERE s.specialist_id=? AND s.booking_mode='manual' AND s.starts_at>? ORDER BY s.starts_at''', (user['specialist_id'], now().isoformat(timespec='minutes'))).fetchall()
+                FROM slots s JOIN services v ON v.id=s.service_id WHERE s.specialist_id=? AND v.deleted=0 AND s.booking_mode='manual' AND s.starts_at>? ORDER BY s.starts_at''', (user['specialist_id'], now().isoformat(timespec='minutes'))).fetchall()
             schedule = schedule_for(c, user['specialist_id'])
-        result = dict(services=[dict(r) for r in services], slots=[dict(r) for r in slots])
+        result = dict(services=[service_details(r) for r in services], slots=[dict(r) for r in slots])
         if schedule:
             result['schedule'] = schedule
         return jsonify(result)
@@ -417,17 +492,28 @@ def create_app(test_config=None):
     @app.post('/api/master/services')
     @auth('master')
     def add_service(user):
-        d = request.get_json()
-        title, mode = str(d.get('title', '')).strip(), d.get('mode')
-        price, duration = d.get('price'), d.get('duration')
-        if not 3 <= len(title) <= 100 or mode not in ['Выезд', 'У специалиста', 'Онлайн', 'Группа'] or type(price) is not int or not 0 <= price <= 1000000 or type(duration) is not int or not 15 <= duration <= 480:
-            return fail('Проверьте название, формат, стоимость и длительность (15–480 минут)')
+        try:
+            fields = service_fields(request.get_json())
+        except ModerationError as error:
+            return fail(str(error), error.status)
         with db() as c:
             if not c.execute('SELECT 1 FROM specialists WHERE id=?', (user['specialist_id'],)).fetchone():
                 return fail('Профиль специалиста не найден', 404)
             ident = c.execute('''INSERT INTO services(specialist_id,title,price,duration,mode,moderation_status)
-                VALUES(?,?,?,?,?,'pending')''', (user['specialist_id'], title, price, duration, mode)).lastrowid
+                VALUES(?,?,?,?,?,'pending')''', (user['specialist_id'], *fields.values())).lastrowid
         return jsonify(ok=True, id=ident, moderation_status='pending'), 201
+
+    @app.post('/api/master/services/<int:ident>/<action>')
+    @auth('master')
+    def update_service(user, ident, action):
+        if not 1 <= ident < 2**63 or action not in ('edit', 'delete'):
+            return fail('Услуга не найдена', 404)
+        try:
+            with db() as c:
+                manage_service(c, user['specialist_id'], ident, request.get_json(), action, now)
+        except ModerationError as error:
+            return fail(str(error), error.status)
+        return jsonify(ok=True)
 
     @app.post('/api/master/slots')
     @auth('master')
@@ -446,7 +532,7 @@ def create_app(test_config=None):
             c.execute('BEGIN IMMEDIATE')
             if schedule_for(c, user['specialist_id']) is not None:
                 return fail('Для ручных слотов переключите режим расписания', 409)
-            service = c.execute('SELECT * FROM services WHERE id=? AND specialist_id=? AND active=1', (d.get('service_id'), user['specialist_id'])).fetchone()
+            service = c.execute('SELECT * FROM services WHERE id=? AND specialist_id=? AND active=1 AND deleted=0', (d.get('service_id'), user['specialist_id'])).fetchone()
             if not service:
                 return fail('Услуга не найдена', 404)
             if service['mode'] != 'Группа' and cap != 1:
@@ -482,7 +568,7 @@ def create_app(test_config=None):
     def admin(user):
         with db() as c:
             return jsonify(specialists=[dict(r) for r in c.execute('SELECT * FROM specialists')],
-                           services=[dict(r) for r in c.execute('SELECT v.*,p.name specialist FROM services v JOIN specialists p ON p.id=v.specialist_id')])
+                           services=[dict(r) for r in c.execute('SELECT v.*,p.name specialist FROM services v JOIN specialists p ON p.id=v.specialist_id WHERE v.deleted=0')])
 
     @app.post('/api/specialist-applications')
     @auth('client')
@@ -499,7 +585,7 @@ def create_app(test_config=None):
     def specialist_applications(user):
         with db() as c:
             rows = c.execute("""SELECT a.*,u.name account_name,u.email FROM specialist_applications a
-                JOIN users u ON u.id=a.user_id ORDER BY (a.status='pending') DESC,a.id DESC""").fetchall()
+                JOIN users u ON u.id=a.user_id ORDER BY a.id DESC""").fetchall()
         return jsonify(applications=[dict(row) for row in rows])
 
     @app.post('/api/admin/specialist-applications/<int:ident>/decision')
@@ -519,9 +605,10 @@ def create_app(test_config=None):
     def service_applications(user):
         with db() as c:
             applications = c.execute('''SELECT v.*,p.name specialist FROM services v
-                JOIN specialists p ON p.id=v.specialist_id WHERE v.moderation_status='pending'
+                JOIN specialists p ON p.id=v.specialist_id WHERE v.deleted=0 AND (v.moderation_status='pending' OR v.draft_status='pending')
                 ORDER BY v.id''').fetchall()
-        return jsonify(applications=[dict(row) for row in applications])
+        return jsonify(applications=[{**dict(row), **(service_details(row)['draft'] or {})}
+                                     for row in applications])
 
     @app.post('/api/admin/service-applications/<int:ident>/decision')
     @auth('admin')
@@ -545,7 +632,8 @@ def create_app(test_config=None):
                 cur = c.execute('UPDATE reviews SET status=? WHERE id=?', (d['status'], ident))
             elif kind in ['specialist', 'service'] and type(d.get('active')) is bool:
                 table = 'specialists' if kind == 'specialist' else 'services'
-                cur = c.execute(f'UPDATE {table} SET active=? WHERE id=?', (int(d['active']), ident))
+                scope = ' AND deleted=0' if kind == 'service' else ''
+                cur = c.execute(f'UPDATE {table} SET active=? WHERE id=?{scope}', (int(d['active']), ident))
             else:
                 return fail('Некорректное действие модерации')
             if not cur.rowcount:
