@@ -361,6 +361,9 @@ def create_app(test_config=None):
         if not 3 <= len(title) <= 100 or mode not in ['Выезд', 'У специалиста', 'Онлайн', 'Группа'] or type(price) is not int or not 0 <= price <= 1000000 or type(duration) is not int or not 15 <= duration <= 480:
             return fail('Проверьте название, формат, стоимость и длительность (15–480 минут)')
         with db() as c:
+            if categories is None:
+                specialist = c.execute('SELECT category FROM specialists WHERE id=?', (user['specialist_id'],)).fetchone()
+                categories = [specialist['category']] if specialist and specialist['category'] else None
             try:
                 categories = normalize_service_categories(c, categories)
             except ValueError as error:
@@ -381,8 +384,15 @@ def create_app(test_config=None):
             service = c.execute('SELECT id FROM services WHERE id=? AND specialist_id=?', (ident, user['specialist_id'])).fetchone()
             if not service:
                 return fail('Услуга не найдена', 404)
+            categories = d.get('categories')
+            if categories is None:
+                categories = [row['name'] for row in c.execute('''SELECT sc.name FROM service_categories sc
+                    JOIN service_category_links scl ON scl.category_id=sc.id WHERE scl.service_id=? AND sc.active=1 ORDER BY sc.id''', (ident,))]
+                if not categories:
+                    specialist = c.execute('SELECT category FROM specialists WHERE id=?', (user['specialist_id'],)).fetchone()
+                    categories = [specialist['category']] if specialist and specialist['category'] else None
             try:
-                categories = normalize_service_categories(c, d.get('categories'))
+                categories = normalize_service_categories(c, categories)
             except ValueError as error:
                 return fail(str(error))
             c.execute('UPDATE services SET title=?,price=?,duration=?,mode=? WHERE id=?', (title, price, duration, mode, ident))
