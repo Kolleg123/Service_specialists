@@ -17,6 +17,7 @@ from backend.bookings.service import BookingError, available_slots, create_booki
 from backend.bookings.lifecycle import (CUSTOMER_ROLES, booking_interval, booking_policy, cancellation_reason,
                                store_transition, transition_booking, upcoming_master_bookings)
 from backend.auth.password_recovery import send_recovery_email
+from backend.database.service_categories import category_groups
 from backend.moderation.services import (ModerationError, PUBLIC_SERVICE, decide_service, manage_service,
                                 service_details, service_fields)
 from backend.moderation.specialists import decide_application, latest_application, submit_application
@@ -24,7 +25,7 @@ from backend.moderation.specialists import decide_application, latest_applicatio
 load_dotenv()
 
 TZ = ZoneInfo('Europe/Kirov')
-CATEGORIES = ['Все специалисты', 'Дом и ремонт', 'Красота', 'Обучение', 'Здоровье', 'Мероприятия']
+PROFILE_CATEGORIES = ['Дом и ремонт', 'Красота', 'Обучение', 'Здоровье', 'Мероприятия']
 
 
 def now():
@@ -208,15 +209,30 @@ def create_app(test_config=None):
     @app.get('/api/catalog')
     def catalog():
         current_time = now()
+        category_id = request.args.get('category_id')
         with db() as c:
+            c.execute('BEGIN')
+            services = {}
+            available = set()
+            for row in c.execute(f'''SELECT v.id,v.specialist_id,v.title,v.price,v.duration,v.mode,v.active,
+                    v.category_id,k.parent_id AS category_group_id
+                FROM services v JOIN specialists p ON p.id=v.specialist_id
+                LEFT JOIN service_categories k ON k.id=v.category_id
+                WHERE {PUBLIC_SERVICE} ORDER BY v.id'''):
+                services.setdefault(row['specialist_id'], []).append(dict(row))
+                if row['category_id'] is not None:
+                    available.add(row['category_id'])
+            categories = category_groups(c, available)
+
             specialists = []
             for row in c.execute('SELECT * FROM specialists WHERE active=1 ORDER BY id'):
                 s = dict(row)
+                s['services'] = services.get(s['id'], [])
+                if category_id and not any(category_id in (v['category_id'], v['category_group_id'])
+                                           for v in s['services']):
+                    continue
                 schedule = schedule_for(c, s['id'])
                 s['booking_mode'] = schedule['mode'] if schedule else 'manual'
-                s['services'] = [dict(r) for r in c.execute(f'''SELECT v.id,v.specialist_id,v.title,v.price,v.duration,v.mode,v.active
-                    FROM services v JOIN specialists p ON p.id=v.specialist_id
-                    WHERE p.id=? AND {PUBLIC_SERVICE}''', (s['id'],))]
                 s['reviews'] = [dict(r) for r in c.execute('SELECT r.*,u.name FROM reviews r JOIN users u ON r.user_id=u.id WHERE r.specialist_id=? AND r.status="approved" ORDER BY r.id DESC', (s['id'],))]
                 s['rating'] = round(sum(r['rating'] for r in s['reviews']) / len(s['reviews']), 1) if s['reviews'] else None
                 try:
@@ -226,14 +242,14 @@ def create_app(test_config=None):
                 s['next_slot'] = next_slot['starts_at'] if next_slot else None
                 s['next_slot_mode'] = next_slot['booking_mode'] if next_slot else None
                 specialists.append(s)
-        return jsonify(specialists=specialists, categories=CATEGORIES, timezone='Europe/Kirov')
+        return jsonify(specialists=specialists, categories=categories, timezone='Europe/Kirov')
 
     @app.get('/api/services/<int:ident>')
     def public_service(ident):
         if not 1 <= ident < 2**63:
             return fail('Услуга не найдена', 404)
         with db() as c:
-            service = c.execute(f'''SELECT v.id,v.specialist_id,v.title,v.price,v.duration,v.mode,v.active
+            service = c.execute(f'''SELECT v.id,v.specialist_id,v.title,v.price,v.duration,v.mode,v.active,v.category_id
                 FROM services v JOIN specialists p ON p.id=v.specialist_id
                 WHERE v.id=? AND {PUBLIC_SERVICE}''', (ident,)).fetchone()
         return jsonify(service=dict(service)) if service else fail('Услуга не найдена', 404)
@@ -359,7 +375,7 @@ def create_app(test_config=None):
         reviewed_ids = {r['booking_id'] for r in reviews}
         rows = [{**dict(b), **booking_policy(b, user, current_time, b['id'] in reviewed_ids)} for b in bookings]
         return jsonify(bookings=rows, pending=pending, searches=[dict(r) for r in searches], reviews=[dict(r) for r in reviews],
-                       specialist_application=application, specialist_categories=CATEGORIES[1:] if client_view else [],
+                       specialist_application=application, specialist_categories=PROFILE_CATEGORIES if client_view else [],
                        user={key: user[key] for key in ('id', 'name', 'email', 'role', 'specialist_id')},
                        server_now=current_time.isoformat(timespec='seconds'))
 
@@ -448,22 +464,28 @@ def create_app(test_config=None):
         message = str(request.get_json().get('message', '')).strip().lower()
         if not 1 <= len(message) <= 1000:
             return fail('Опишите задачу в пределах 1000 символов')
-        rules = [(['кран', 'теч', 'труба', 'сантех', 'унитаз', 'засор'], 1, 'Похоже, вам нужен сантехник. Если вода течёт, по возможности перекройте её подачу. Алексей поможет найти причину и устранить протечку.'),
-                 (['розет', 'электр', 'провод', 'свет'], 2, 'Рекомендую электрика. Не касайтесь оголённых проводов. При запахе гари отключите питание, если это безопасно, и обратитесь в аварийную службу.'),
-                 (['стриж', 'волос', 'уклад', 'красот'], 3, 'С новой стрижкой и уходом за волосами поможет стилист Мария.'),
-                 (['англий', 'язык', 'экзамен', 'репетитор'], 4, 'Для занятий английским рекомендую Анну. Можно выбрать индивидуальный урок или разговорный клуб.'),
-                 (['массаж', 'спин', 'мышц'], 5, 'По расслабляющему массажу можно обратиться к Дмитрию. При боли или травме сначала обратитесь к врачу: этот помощник не ставит диагнозов.'),
-                 (['семинар', 'фото', 'съём', 'мастер-класс'], 6, 'Елена проводит фотосессии и групповые мастер-классы. При записи на мастер-класс выберите количество мест.')]
+        rules = [(['кран', 'теч', 'труба', 'сантех', 'унитаз', 'засор'], 1, ('plumbing',), 'Похоже, вам нужен сантехник. Если вода течёт, по возможности перекройте её подачу. Алексей поможет найти причину и устранить протечку.'),
+                 (['розет', 'электр', 'провод', 'свет'], 2, ('electrical',), 'Рекомендую электрика. Не касайтесь оголённых проводов. При запахе гари отключите питание, если это безопасно, и обратитесь в аварийную службу.'),
+                 (['стриж', 'волос', 'уклад', 'красот'], 3, ('hair',), 'С новой стрижкой и уходом за волосами поможет стилист Мария.'),
+                 (['англий', 'язык', 'экзамен', 'репетитор'], 4, ('english',), 'Для занятий английским рекомендую Анну. Можно выбрать индивидуальный урок или разговорный клуб.'),
+                 (['массаж', 'спин', 'мышц'], 5, ('massage',), 'По расслабляющему массажу можно обратиться к Дмитрию. При боли или травме сначала обратитесь к врачу: этот помощник не ставит диагнозов.'),
+                 (['семинар', 'фото', 'съём', 'мастер-класс'], 6, ('portrait', 'photo-lessons'), 'Елена проводит фотосессии и групповые мастер-классы. При записи на мастер-класс выберите количество мест.')]
         if any(x in message for x in ['газ', 'пожар', 'задыха', 'груд', 'искрит']):
             return jsonify(reply='Это может быть экстренная ситуация. При непосредственной опасности звоните 112. Обычная запись к специалисту не заменяет экстренную помощь.', specialist_id=None)
-        for words, ident, reply in rules:
+        for words, seed_id, category_ids, reply in rules:
             if any(w in message for w in words):
+                placeholders = ','.join('?' for _ in category_ids)
                 with db() as c:
-                    active = c.execute(f'''SELECT p.id FROM seed_entities e JOIN specialists p ON p.id=e.entity_id
-                        WHERE e.seed_key=? AND EXISTS(
-                            SELECT 1 FROM services v WHERE v.specialist_id=p.id AND {PUBLIC_SERVICE})''', (f'specialist:{ident}',)).fetchone()
-                if active:
-                    return jsonify(reply=reply, specialist_id=active['id'])
+                    match = c.execute(f'''SELECT p.id AS specialist_id,v.id AS service_id,e.seed_key
+                        FROM services v JOIN specialists p ON p.id=v.specialist_id
+                        LEFT JOIN seed_entities e ON e.entity_id=p.id AND e.seed_key=?
+                        WHERE v.category_id IN ({placeholders}) AND {PUBLIC_SERVICE}
+                        ORDER BY e.seed_key IS NULL, v.id LIMIT 1''',
+                                      (f'specialist:{seed_id}', *category_ids)).fetchone()
+                if match:
+                    if match['seed_key'] is None:
+                        reply = 'В каталоге есть специалист с подходящей услугой.'
+                    return jsonify(reply=reply, specialist_id=match['specialist_id'], service_id=match['service_id'])
                 return jsonify(reply='Специалист этой категории сейчас недоступен. Попробуйте поискать в каталоге позже.', specialist_id=None)
         return jsonify(reply='Расскажите чуть подробнее: нужна помощь с ремонтом дома, стрижкой, английским, массажем или фотографией? Я подберу категорию и предложу специалиста.', specialist_id=None)
 
@@ -478,7 +500,9 @@ def create_app(test_config=None):
             slots = c.execute('''SELECT s.*,v.title service,COALESCE((SELECT SUM(quantity) FROM bookings WHERE slot_id=s.id AND status='confirmed'),0) booked
                 FROM slots s JOIN services v ON v.id=s.service_id WHERE s.specialist_id=? AND v.deleted=0 AND s.booking_mode='manual' AND s.starts_at>? ORDER BY s.starts_at''', (user['specialist_id'], now().isoformat(timespec='minutes'))).fetchall()
             schedule = schedule_for(c, user['specialist_id'])
-        result = dict(services=[service_details(r) for r in services], slots=[dict(r) for r in slots])
+            categories = category_groups(c)
+        result = dict(services=[service_details(r) for r in services], slots=[dict(r) for r in slots],
+                      categories=categories)
         if schedule:
             result['schedule'] = schedule
         return jsonify(result)
@@ -501,14 +525,14 @@ def create_app(test_config=None):
     @auth('master')
     def add_service(user):
         try:
-            fields = service_fields(request.get_json())
+            with db() as c:
+                fields = service_fields(c, request.get_json())
+                if not c.execute('SELECT 1 FROM specialists WHERE id=?', (user['specialist_id'],)).fetchone():
+                    return fail('Профиль специалиста не найден', 404)
+                ident = c.execute('''INSERT INTO services(specialist_id,title,price,duration,mode,category_id,moderation_status)
+                    VALUES(?,?,?,?,?,?,'pending')''', (user['specialist_id'], *fields.values())).lastrowid
         except ModerationError as error:
             return fail(str(error), error.status)
-        with db() as c:
-            if not c.execute('SELECT 1 FROM specialists WHERE id=?', (user['specialist_id'],)).fetchone():
-                return fail('Профиль специалиста не найден', 404)
-            ident = c.execute('''INSERT INTO services(specialist_id,title,price,duration,mode,moderation_status)
-                VALUES(?,?,?,?,?,'pending')''', (user['specialist_id'], *fields.values())).lastrowid
         return jsonify(ok=True, id=ident, moderation_status='pending'), 201
 
     @app.post('/api/master/services/<int:ident>/<action>')
@@ -583,7 +607,7 @@ def create_app(test_config=None):
     def apply_for_specialist(user):
         try:
             with db() as c:
-                application = submit_application(c, user['id'], request.get_json(), CATEGORIES[1:], now)
+                application = submit_application(c, user['id'], request.get_json(), PROFILE_CATEGORIES, now)
         except ModerationError as error:
             return fail(str(error), error.status)
         return jsonify(application=application), 201
@@ -620,8 +644,14 @@ def create_app(test_config=None):
                 FROM services v JOIN specialists p ON p.id=v.specialist_id
                 WHERE v.deleted=0 AND (?='all' OR COALESCE(v.draft_status,v.moderation_status)=?)
                 ORDER BY v.id DESC""", (status, status)).fetchall()
-        return jsonify(applications=[{**dict(row), **(service_details(row)['draft'] or {})}
-                                     for row in applications])
+            labels = {category['id']: (group['name'], category['name'])
+                      for group in category_groups(c) for category in group['categories']}
+        result = []
+        for row in applications:
+            service = {**dict(row), **(service_details(row)['draft'] or {})}
+            service['category_direction'], service['category_name'] = labels.get(service['category_id'], (None, None))
+            result.append(service)
+        return jsonify(applications=result)
 
     @app.post('/api/admin/service-applications/<int:ident>/decision')
     @auth('admin')

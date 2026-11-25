@@ -3,7 +3,7 @@ import json
 
 
 PUBLIC_SERVICE = "p.active=1 AND v.active=1 AND v.deleted=0 AND v.moderation_status='approved'"
-FIELDS = ('title', 'price', 'duration', 'mode')
+FIELDS = ('title', 'price', 'duration', 'mode', 'category_id')
 
 
 class ModerationError(Exception):
@@ -12,14 +12,18 @@ class ModerationError(Exception):
         self.status = status
 
 
-def service_fields(data):
-    title, price, duration, mode = (data.get(key) for key in FIELDS)
+def service_fields(connection, data):
+    title, price, duration, mode, category_id = (data.get(key) for key in FIELDS)
     if (not isinstance(title, str) or not 3 <= len(title.strip()) <= 100
             or type(price) is not int or not 0 <= price <= 1000000
             or type(duration) is not int or not 15 <= duration <= 480
             or mode not in ('Выезд', 'У специалиста', 'Онлайн', 'Группа')):
         raise ModerationError('Проверьте название, формат, стоимость и длительность (15–480 минут)')
-    return dict(zip(FIELDS, (title.strip(), price, duration, mode)))
+    if not isinstance(category_id, str) or not category_id.isascii() or not connection.execute(
+            'SELECT 1 FROM service_categories WHERE id=? AND parent_id IS NOT NULL', (category_id,)
+    ).fetchone():
+        raise ModerationError('Выберите категорию услуги из справочника')
+    return dict(zip(FIELDS, (title.strip(), price, duration, mode, category_id)))
 
 
 def service_details(row):
@@ -46,7 +50,7 @@ def manage_service(connection, specialist_id, service_id, data, action, clock):
         connection.execute('UPDATE services SET deleted=1,active=0,revision=revision+1 WHERE id=?',
                            (service_id,))
         return
-    fields = service_fields(data)
+    fields = service_fields(connection, data)
     if service['moderation_status'] == 'approved':
         connection.execute("""UPDATE services SET draft=?,draft_status='pending',draft_reason=NULL,
             revision=revision+1 WHERE id=?""", (json.dumps(fields, ensure_ascii=False), service_id))
@@ -54,7 +58,7 @@ def manage_service(connection, specialist_id, service_id, data, action, clock):
         if (fields['duration'], fields['mode']) != (service['duration'], service['mode']):
             connection.execute("UPDATE slots SET active=0 WHERE service_id=? AND booking_mode='manual'",
                                (service_id,))
-        connection.execute("""UPDATE services SET title=?,price=?,duration=?,mode=?,
+        connection.execute("""UPDATE services SET title=?,price=?,duration=?,mode=?,category_id=?,
             moderation_status='pending',moderation_reason=NULL,revision=revision+1 WHERE id=?""",
                            (*fields.values(), service_id))
 
@@ -97,7 +101,7 @@ def decide_service(connection, service_id, data, clock):
             connection.execute("""UPDATE slots SET active=0,ends_at=COALESCE(ends_at,
                 strftime('%Y-%m-%dT%H:%M', starts_at, '+' || ? || ' minutes'))
                 WHERE service_id=? AND booking_mode='manual'""", (service['duration'], service_id))
-        connection.execute("""UPDATE services SET title=?,price=?,duration=?,mode=?,
+        connection.execute("""UPDATE services SET title=?,price=?,duration=?,mode=?,category_id=?,
             draft=NULL,draft_status=NULL,draft_reason=NULL WHERE id=?""",
                            (*(fields[key] for key in FIELDS), service_id))
     else:

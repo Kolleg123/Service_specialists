@@ -87,6 +87,7 @@ test('booking, cancellation, review, moderation, schedule and consultation', asy
   await page.getByRole('button', { name: 'Мои услуги' }).click();
   await page.getByLabel('Название', { exact: true }).fill('Проверка сантехнического оборудования');
   await page.getByLabel('Стоимость, ₽').fill('1700');
+  await page.getByLabel('Категория услуги').selectOption('plumbing');
   await page.getByRole('button', { name: 'Добавить услугу' }).click();
   await expect(page.getByRole('heading', { name: 'Проверка сантехнического оборудования' })).toBeVisible();
   await page.getByRole('button', { name: 'Моё расписание' }).click();

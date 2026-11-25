@@ -25,6 +25,7 @@ def add_service(master, duration):
         'price': 500,
         'duration': duration,
         'mode': 'Онлайн',
+        'category_id': 'plumbing',
     })
     return response
 
@@ -55,6 +56,7 @@ def test_duration_outside_integer_bounds_is_rejected(schedule, duration):
         'price': 500,
         'duration': duration,
         'mode': 'Онлайн',
+        'category_id': 'plumbing',
     })
     assert response.status_code == 400
 

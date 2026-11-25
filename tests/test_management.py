@@ -7,7 +7,7 @@ from tests.test_specialist_registration import APPLICATION, app
 
 def test_service_edits_moderation_and_removal(app):
     master, admin, other, customer = (client(app, role) for role in ('master', 'admin', 'teacher', 'client'))
-    details = dict(title='Новая услуга', price=800, duration=60, mode='Онлайн')
+    details = dict(title='Новая услуга', price=800, duration=60, mode='Онлайн', category_id='plumbing')
     service_id = post(master, '/master/services', details).json['id']
     manage = f'/master/services/{service_id}'
     decide = f'/admin/service-applications/{service_id}/decision'

@@ -7,8 +7,7 @@ const reviewCount = n => `${n} ${n % 100 >= 11 && n % 100 <= 14 ? 'отзыво�
 const time = s => s.slice(11,16);
 const localNow = () => new Date().toLocaleString('sv-SE', {timeZone:'Europe/Kirov'}).replace(' ', 'T').slice(0,16);
 const serviceStatus = {pending:'На проверке',approved:'Одобрена',rejected:'Отклонена'};
-const icons = {'Все специалисты':'✧','Дом и ремонт':'⌂','Красота':'✂','Обучение':'▤','Здоровье':'♡','Мероприятия':'◎'};
-let state = {user:null, csrf:'', specialists:[], categories:[], category:'Все специалисты', query:'', sort:'recommended', maxPrice:'', mode:''};
+let state = {user:null, csrf:'', specialists:[], categories:[], categoryGroup:'', category:'', query:'', sort:'recommended', maxPrice:'', mode:''};
 let dashboardTab = 'bookings';
 let dashboardMode = 'master';
 let dashboardStatusFilter = 'all';
@@ -36,37 +35,62 @@ function modal(html) {$('#modal-content').innerHTML = html; if (!$('#modal').ope
 function closeModal() {$('#modal').close();}
 function updateAccount() {$('#account').innerHTML = state.user ? `${esc(state.user.name.split(' ')[0])} <span class="avatar">${esc(state.user.name[0])}</span>` : 'Личный кабинет <span>↗</span>';}
 async function refreshCatalog() {const data = await api('/catalog'); state.specialists = data.specialists; state.categories = data.categories;}
-function card(s) {
- const min = s.services.length ? Math.min(...s.services.map(x => x.price)) : null;
- return `<article class="specialist-card"><button class="photo-button" data-profile="${s.id}" aria-label="Профиль: ${esc(s.name)}"><img src="${esc(s.photo)}" alt="Демонстрационное фото специалиста ${esc(s.name)}" loading="lazy"><span class="photo-label">${esc(s.category)}</span><span class="photo-arrow">↗</span></button><div class="card-body"><div class="rating">★ <b>${s.rating ?? 'Новый'}</b><span>${s.reviews.length ? reviewCount(s.reviews.length) : 'Пока без отзывов'}</span></div><button class="name-link" data-profile="${s.id}">${esc(s.name)}</button><p class="profession">${esc(s.profession)} <span>· ${s.experience} лет опыта</span></p><p class="location">⌖ ${esc(s.location)}</p><div class="tags">${s.skills.split(',').slice(0,2).map(x => `<span>${esc(x)}</span>`).join('')}</div><div class="card-bottom"><div><small>Стоимость услуг</small><strong>${min === null ? 'Нет услуг' : 'от ' + money(min)}</strong></div><button class="button pale" data-profile="${s.id}">Выбрать время <span>↗</span></button></div></div></article>`;
+function card({specialist: s, service, price, category}) {
+ const profileAttributes = `data-profile="${s.id}" data-preferred-service="${service.id}"`;
+ return `<article class="specialist-card"><button class="photo-button" ${profileAttributes} aria-label="Профиль: ${esc(s.name)}"><img src="${esc(s.photo)}" alt="Демонстрационное фото специалиста ${esc(s.name)}" loading="lazy">${category ? `<span class="photo-label">${esc(category)}</span>` : ''}<span class="photo-arrow">↗</span></button><div class="card-body"><div class="rating">★ <b>${s.rating ?? 'Новый'}</b><span>${s.reviews.length ? reviewCount(s.reviews.length) : 'Пока без отзывов'}</span></div><button class="name-link" ${profileAttributes}>${esc(s.name)}</button><p class="profession">${esc(s.profession)} <span>· ${s.experience} лет опыта</span></p><p class="location">⌖ ${esc(s.location)}</p><div class="tags">${s.skills.split(',').slice(0,2).map(x => `<span>${esc(x)}</span>`).join('')}</div><div class="card-bottom"><div><small>Стоимость услуг</small><strong>от ${money(price)}</strong></div><button class="button pale" ${profileAttributes}>Выбрать время <span>↗</span></button></div></div></article>`;
 }
 function catalog() {
  $('#app').innerHTML = `<section class="hero"><div class="hero-text"><span class="eyebrow"><i></i> ХОРОШИЕ СПЕЦИАЛИСТЫ РЯДОМ</span><h1>Нужный человек.<br><em>В удобное время.</em></h1><p>От ремонта крана до нового увлечения — найдите своего<br class="desktop"> специалиста и запишитесь без лишних звонков.</p><form id="search-form" class="search-box"><span>⌕</span><input id="search-input" placeholder="Какая помощь вам нужна?" aria-label="Поиск специалистов" value="${esc(state.query)}"><button class="button">Найти <span>↗</span></button></form><div class="popular">Например: <button data-query="Сантехник">сантехник</button><button data-query="Стрижка">стрижка</button><button data-query="Английский">английский</button></div><div class="hero-proof"><div class="mini-faces">${state.specialists.slice(0,3).map(s=>`<img src="${s.photo}" alt="">`).join('')}</div><div><strong>Меньше поисков. Больше жизни.</strong><span>Свободные слоты и понятные цены</span></div></div></div><div class="hero-art"><img src="/static/photos/hero.jpg" alt="Стилист работает над причёской клиента в салоне"><span class="art-caption">Хорошая работа<br>начинается с человека.</span><div class="float-card"><span class="check-round">✓</span><div><strong>Всё складывается</strong><span>Выбирайте время — остальное за нами</span></div><span>✧</span></div><div class="art-top">СВОБОДНО ДЛЯ ВАШИХ ПЛАНОВ <span>↗</span></div></div></section>
- <section class="catalog-section" id="catalog-section"><div class="section-title"><div><span class="eyebrow">НАЙДИТЕ СВОЕГО</span><h2>Специалисты, которым по пути с вами</h2></div><span class="catalog-count"></span></div><div class="category-tabs">${state.categories.map(c=>`<button data-category="${esc(c)}" class="${state.category===c?'selected':''}"><span>${icons[c]}</span>${esc(c)}</button>`).join('')}</div><div class="filter-bar"><div class="filters"><label><span>Формат</span><select id="mode-filter"><option value="">Любой формат</option>${['Выезд','У специалиста','Онлайн','Группа'].map(m=>`<option ${state.mode===m?'selected':''}>${m}</option>`).join('')}</select></label><label><span>Цена до</span><select id="price-filter"><option value="">Любая цена</option>${[1500,2500,5000].map(n=>`<option value="${n}" ${state.maxPrice==n?'selected':''}>${money(n)}</option>`).join('')}</select></label><button id="reset-filter" class="text-button">Сбросить</button></div><label class="sort-label">Сначала <select id="sort-filter"><option value="recommended">рекомендуемые</option><option value="price">недорогие</option><option value="rating">с высоким рейтингом</option><option value="experience">опытные</option></select></label></div><div id="cards" class="card-grid"></div></section>
+ <section class="catalog-section" id="catalog-section"><div class="section-title"><div><span class="eyebrow">НАЙДИТЕ СВОЕГО</span><h2>Специалисты, которым по пути с вами</h2></div><span class="catalog-count"></span></div><div class="filter-bar"><div class="filters"><label><span>Направление</span><select id="direction-filter"></select></label><label><span>Категория</span><select id="category-filter"></select></label><label><span>Формат</span><select id="mode-filter"><option value="">Любой формат</option>${['Выезд','У специалиста','Онлайн','Группа'].map(m=>`<option ${state.mode===m?'selected':''}>${m}</option>`).join('')}</select></label><label><span>Цена до</span><select id="price-filter"><option value="">Любая цена</option>${[1500,2500,5000].map(n=>`<option value="${n}" ${state.maxPrice==n?'selected':''}>${money(n)}</option>`).join('')}</select></label><button id="reset-filter" class="text-button">Сбросить</button></div><label class="sort-label">Сначала <select id="sort-filter"><option value="recommended">рекомендуемые</option><option value="price">недорогие</option><option value="rating">с высоким рейтингом</option><option value="experience">опытные</option></select></label></div><div id="cards" class="card-grid"></div></section>
  <section class="help-banner"><div class="help-symbol">✧</div><div><h2>Не знаете, кого выбрать?</h2><p>Опишите задачу — наш помощник подскажет, к кому обратиться.</p></div><button class="button light" id="banner-chat">Спросить помощника ↗</button></section>
  <section class="how" id="how-section"><div><span class="eyebrow">ВСЁ ПРОСТО</span><h2>От задачи до встречи —<br>три шага</h2></div>${[['01','Найдите специалиста','Выберите категорию, сравните услуги и прочитайте отзывы.'],['02','Выберите время','Только доступные слоты. Дата, время и стоимость — сразу перед вами.'],['03','Занимайтесь своим','Ваша запись в личном кабинете. Планы изменились? Её можно отменить.']].map(([n,t,p])=>`<article><span>${n}</span><h3>${t}</h3><p>${p}</p></article>`).join('')}</section>`;
  $('#sort-filter').value = state.sort;
  $('#search-form').onsubmit = async e => {e.preventDefault(); state.query = $('#search-input').value.trim(); drawCards(); if (['client','master'].includes(state.user?.role) && state.query) {try {await api('/searches',{query:state.query});} catch(e){toast(e.message);}} $('#catalog-section').scrollIntoView({behavior:'smooth'});};
  $$('[data-query]').forEach(b=>b.onclick=()=>{$('#search-input').value=b.dataset.query; $('#search-form').requestSubmit();});
- $$('[data-category]').forEach(b=>b.onclick=()=>{state.category=b.dataset.category; $$('[data-category]').forEach(x=>x.classList.toggle('selected',x===b)); drawCards();});
+ bindCatalogCategories();
  $('#mode-filter').onchange=e=>{state.mode=e.target.value;drawCards();};
  $('#price-filter').onchange=e=>{state.maxPrice=e.target.value;drawCards();};
  $('#sort-filter').onchange=e=>{state.sort=e.target.value;drawCards();};
- $('#reset-filter').onclick=()=>{state.category='Все специалисты';state.mode='';state.maxPrice='';state.query='';catalog();};
+ $('#reset-filter').onclick=()=>{state.categoryGroup='';state.category='';state.mode='';state.maxPrice='';state.query='';catalog();};
  $('#banner-chat').onclick=openChat;
  $('#catalog-section').insertBefore(chatLauncher,$('.filter-bar'));
  drawCards();
 }
 function drawCards() {
- let list=state.specialists.filter(s=>(state.category==='Все специалисты'||s.category===state.category) && (!state.query||[s.name,s.profession,s.skills,...s.services.map(v=>v.title)].join(' ').toLowerCase().includes(state.query.toLowerCase())) && s.services.some(v=>(!state.mode||v.mode===state.mode)&&(!state.maxPrice||v.price<=Number(state.maxPrice))));
- if(state.sort==='price')list.sort((a,b)=>Math.min(...a.services.map(x=>x.price))-Math.min(...b.services.map(x=>x.price)));
- if(state.sort==='rating')list.sort((a,b)=>(b.rating||0)-(a.rating||0));
- if(state.sort==='experience')list.sort((a,b)=>b.experience-a.experience);
- $('#cards').innerHTML=list.length?list.map(card).join(''):'<div class="empty"><span>⌕</span><h3>Пока никого не нашли</h3><p>Попробуйте другую задачу или сбросьте фильтры.</p></div>';
- $('.catalog-count').textContent=`Найдено: ${list.length}`;
+ const query = state.query.toLowerCase();
+ const labels = new Map(state.categories.flatMap(group => [
+  [group.id, group.name], ...group.categories.map(category => [category.id, category.name])
+ ]));
+ const list = [];
+ for (const specialist of state.specialists) {
+  const profileMatches = [specialist.name, specialist.profession, specialist.skills]
+   .some(value => value?.toLowerCase().includes(query));
+  const services = specialist.services.filter(service =>
+   (!state.categoryGroup || service.category_group_id === state.categoryGroup) &&
+   (!state.category || service.category_id === state.category) &&
+   (!state.mode || service.mode === state.mode) &&
+   (!state.maxPrice || service.price <= Number(state.maxPrice)) &&
+   (!query || profileMatches || [service.title, labels.get(service.category_id), labels.get(service.category_group_id)]
+    .some(value => value?.toLowerCase().includes(query))));
+  if (services.length) {
+   const service = services[0];
+   list.push({specialist, service, price: Math.min(...services.map(item => item.price)),
+    category: labels.get(service.category_id)});
+  }
+ }
+ if (state.sort === 'price') list.sort((a, b) => a.price - b.price);
+ if (state.sort === 'rating') list.sort((a, b) => (b.specialist.rating || 0) - (a.specialist.rating || 0));
+ if (state.sort === 'experience') list.sort((a, b) => b.specialist.experience - a.specialist.experience);
+ $('#cards').innerHTML = list.length ? list.map(card).join('') :
+  '<div class="empty"><span>⌕</span><h3>Пока никого не нашли</h3><p>Попробуйте другую задачу или сбросьте фильтры.</p></div>';
+ $('.catalog-count').textContent = `Найдено: ${list.length}`;
  bindProfiles($('#cards'));
 }
-function bindProfiles(root=document) {$$('[data-profile]',root).forEach(b=>b.onclick=()=>profile(Number(b.dataset.profile)).catch(e=>toast(e.message)));}
+function bindProfiles(root=document) {
+ $$('[data-profile]', root).forEach(button => button.onclick = () =>
+  profile(Number(button.dataset.profile), Number(button.dataset.preferredService))
+   .catch(error => toast(error.message)));
+}
 function requestPasswordReset() {
  modal('<span class="eyebrow">ВОССТАНОВЛЕНИЕ ДОСТУПА</span><h2>Забыли пароль?</h2><p class="muted">Укажите почту, связанную с аккаунтом. Если адрес зарегистрирован, мы отправим инструкцию.</p><form id="reset-request-form"><label class="field">Электронная почта<input name="email" type="email" autocomplete="email" required maxlength="120"></label><p class="form-error" role="alert"></p><button class="button full">Отправить ссылку →</button></form>');
  const form=$('#reset-request-form');
@@ -259,11 +283,15 @@ async function refreshDashboard() {
   catalogRefreshPending = true;
   const routeId = catalogRequest;
   try {
-   const {specialists} = await api('/catalog');
-   if (routeId === catalogRequest && location.hash !== '#dashboard' && $('#cards') && !$('#modal').open &&
-       JSON.stringify(specialists) !== JSON.stringify(state.specialists)) {
-    state.specialists = specialists;
-    drawCards();
+   const {specialists, categories} = await api('/catalog');
+   if (routeId === catalogRequest && location.hash !== '#dashboard' && $('#cards') && !$('#modal').open) {
+    const categoriesChanged = JSON.stringify(categories) !== JSON.stringify(state.categories);
+    if (categoriesChanged || JSON.stringify(specialists) !== JSON.stringify(state.specialists)) {
+     state.specialists = specialists;
+     state.categories = categories;
+     if (categoriesChanged) updateCatalogCategories();
+     drawCards();
+    }
    }
   } catch {
    // Keep the last catalog until the connection returns.
@@ -397,7 +425,7 @@ async function renderDashboard(background) {
   };$('#booking-status').onchange=()=>{dashboardStatusFilter=$('#booking-status').value;draw();};draw();
  }else if(dashboardTab==='searches'){
   root.innerHTML='<h2>Недавно вы искали</h2>'+(data.searches.length?data.searches.map(s=>`<button class="search-history" data-query-history="${esc(s.query)}"><span>⌕ &nbsp; ${esc(s.query)}</span><small>${date(s.created_at)}</small><span>↗</span></button>`).join(''):'<div class="empty">Ваши поисковые запросы появятся здесь.</div>');
-  $$('[data-query-history]').forEach(b=>b.onclick=()=>{state.query=b.dataset.queryHistory;state.category='Все специалисты';state.mode='';state.maxPrice='';location.hash='catalog';});
+  $$('[data-query-history]').forEach(b=>b.onclick=()=>{state.query=b.dataset.queryHistory;state.categoryGroup='';state.category='';state.mode='';state.maxPrice='';location.hash='catalog';});
  }else if(dashboardTab==='reviews'||dashboardTab==='moderation'){
   const reviewFilter = adminFilters['review-filter'];
   const reviews = isAdmin && reviewFilter !== 'all' ? data.reviews.filter(review => review.status === reviewFilter) : data.reviews;
@@ -421,7 +449,7 @@ async function renderDashboard(background) {
    form.onsubmit=async e=>{e.preventDefault();const d=Object.fromEntries(new FormData(form));d.service_id=Number(d.service_id);d.capacity=Number(d.capacity);try{await api('/master/slots',d);await dashboard();toast('Слот добавлен');}catch(e){$('.form-error',form).textContent=e.message;}};
    $$('[data-close-slot]').forEach(b=>b.onclick=async()=>{try{await api('/master/slots/'+b.dataset.closeSlot+'/close',{});await dashboard();toast('Слот закрыт');}catch(e){toast(e.message);}});
   }else{
-   renderManagedServices(root, m.services);
+   renderManagedServices(root, m.services, m.categories);
   }
  }else if(dashboardTab==='specialist-application'){
   renderSpecialistApplication(root, application, user, data.specialist_categories);
@@ -437,6 +465,7 @@ async function renderDashboard(background) {
    <details class="panel" data-application-key="service-${service.id}">
     <summary><strong>${service.draft_status ? 'Изменения: ' : ''}${esc(service.title)}</strong>
      · ${esc(service.specialist)} · ${serviceStatus[service.application_status]}</summary>
+    <p>${service.category_name ? `${esc(service.category_direction)} / ${esc(service.category_name)}` : 'Категория не указана'}</p>
     <p>${esc(service.mode)} · ${service.duration} мин · ${money(service.price)}</p>
     ${service.application_status === 'rejected' ? `<p>Причина: ${esc(service.draft_reason ?? service.moderation_reason)}</p>` : ''}
     ${service.application_status === 'pending' ? `<form data-service-decision="${service.id}" data-revision="${service.revision}">
@@ -512,7 +541,7 @@ function reviewForm(booking_id){modal('<h2>Как прошла встреча?</
 function openChat(){$('#chat').classList.remove('hidden');chatLauncher.classList.add('hidden');$('#chat-input').focus();}
 $('#chat-launch').onclick=openChat;
 $('#chat-close').onclick=()=>{$('#chat').classList.add('hidden');chatLauncher.classList.remove('hidden');};
-$('#chat-form').onsubmit=async e=>{e.preventDefault();const input=$('#chat-input'),message=input.value.trim();if(!message)return;const list=$('#chat-messages');list.insertAdjacentHTML('beforeend',`<div class="bubble user">${esc(message)}</div>`);input.value='';const button=$('button',$('#chat-form'));button.disabled=true;try{const r=await api('/consult',{message});list.insertAdjacentHTML('beforeend',`<div class="bubble">${esc(r.reply)}${r.specialist_id?`<button class="button pale" data-profile="${r.specialist_id}">Посмотреть специалиста ↗</button>`:''}</div>`);bindProfiles(list);}catch(e){list.insertAdjacentHTML('beforeend',`<div class="bubble">${esc(e.message)}. Попробуйте ещё раз.</div>`);}finally{button.disabled=false;list.scrollTop=list.scrollHeight;}};
+$('#chat-form').onsubmit=async e=>{e.preventDefault();const input=$('#chat-input'),message=input.value.trim();if(!message)return;const list=$('#chat-messages');list.insertAdjacentHTML('beforeend',`<div class="bubble user">${esc(message)}</div>`);input.value='';const button=$('button',$('#chat-form'));button.disabled=true;try{const r=await api('/consult',{message});list.insertAdjacentHTML('beforeend',`<div class="bubble">${esc(r.reply)}${r.specialist_id?`<button class="button pale" data-profile="${r.specialist_id}" data-preferred-service="${r.service_id}">Посмотреть специалиста ↗</button>`:''}</div>`);bindProfiles(list);}catch(e){list.insertAdjacentHTML('beforeend',`<div class="bubble">${esc(e.message)}. Попробуйте ещё раз.</div>`);}finally{button.disabled=false;list.scrollTop=list.scrollHeight;}};
 $('#modal-close').onclick=closeModal;
 $('#modal').onclick=e=>{if(e.target===$('#modal')){const r=$('#modal').getBoundingClientRect();if(e.clientX<r.left||e.clientX>r.right||e.clientY<r.top||e.clientY>r.bottom)closeModal();}};
 $('#account').onclick=()=>{if(state.user){location.hash='dashboard';dashboard().catch(e=>toast(e.message));}else login();};

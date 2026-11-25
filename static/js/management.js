@@ -70,13 +70,16 @@ function serviceFormFields(service = {}) {
   <label class="field">Стоимость, ₽<input name="price" type="number" min="0" max="1000000" required value="${service.price ?? ''}"></label>
   <label class="field">Длительность, мин<input name="duration" type="number" min="15" max="480" required value="${service.duration ?? 60}"></label>
   <label class="field">Формат<select name="mode">${['Выезд','У специалиста','Онлайн','Группа'].map(mode =>
-   `<option ${mode === service.mode ? 'selected' : ''}>${mode}</option>`).join('')}</select></label>`;
+   `<option ${mode === service.mode ? 'selected' : ''}>${mode}</option>`).join('')}</select></label>
+  ${serviceCategoryFields()}`;
 }
 
-function bindServiceForm(form, path, inModal = false) {
+function bindServiceForm(form, path, categories, initialCategory, inModal = false) {
+ bindServiceCategories(form, categories, initialCategory);
  form.onsubmit = async event => {
   event.preventDefault();
   const data = Object.fromEntries(new FormData(form));
+  delete data.category_group;
   data.price = Number(data.price);
   data.duration = Number(data.duration);
   const button = $('button', form);
@@ -94,26 +97,27 @@ function bindServiceForm(form, path, inModal = false) {
  };
 }
 
-function renderManagedServices(root, services) {
+function renderManagedServices(root, services, categories) {
  root.innerHTML = `<h2>Мои услуги</h2><div class="service-list">${services.map(service => `
   <article class="panel service-row" data-service-id="${service.id}">
    <div><h3>${esc(service.title)}</h3><p>${esc(service.mode)} · ${service.duration} мин ·
     ${serviceStatus[service.moderation_status]}${service.active ? '' : ' · Скрыта'}</p>
-   <p>${money(service.price)}</p>
-   ${service.draft ? `<p>Изменения «${esc(service.draft.title)}» · ${serviceStatus[service.draft_status]}</p>` : ''}
+   <p>${esc(serviceCategoryLabel(categories, service.category_id))} · ${money(service.price)}</p>
+   ${service.draft ? `<p>Изменения «${esc(service.draft.title)}» · ${serviceStatus[service.draft_status]} · ${esc(serviceCategoryLabel(categories, service.draft.category_id))}</p>` : ''}
    ${(service.draft_reason || service.moderation_reason) ? `<p>Причина отклонения: ${esc(service.draft_reason || service.moderation_reason)}</p>` : ''}
    <div class="dialog-actions"><button data-edit-service class="button outline">Изменить</button>
    <button data-delete-service class="button outline">Удалить</button></div></div>
   </article>`).join('')}</div>
   <h3>Добавить услугу</h3><form id="service-form" class="panel form-grid">${serviceFormFields()}
    <button class="button">Добавить услугу +</button><p class="form-error" role="alert"></p></form>`;
- bindServiceForm($('#service-form', root), '/master/services');
+ bindServiceForm($('#service-form', root), '/master/services', categories);
  for (const service of services) {
   const row = $(`[data-service-id="${service.id}"]`, root);
   $('[data-edit-service]', row).onclick = () => {
-   modal(`<h2>Изменить услугу</h2><form id="edit-service-form">${serviceFormFields(service.draft ?? service)}
+   const edited = service.draft ?? service;
+   modal(`<h2>Изменить услугу</h2><form id="edit-service-form">${serviceFormFields(edited)}
     <button class="button">Отправить на проверку</button><p class="form-error" role="alert"></p></form>`);
-   bindServiceForm($('#edit-service-form'), `/master/services/${service.id}/edit`, true);
+   bindServiceForm($('#edit-service-form'), `/master/services/${service.id}/edit`, categories, edited.category_id, true);
   };
   $('[data-delete-service]', row).onclick = async () => {
    try {

@@ -45,6 +45,7 @@ def test_slot_horizon_and_capacity_boundaries(tmp_path, monkeypatch):
         "price": 0,
         "duration": 15,
         "mode": "Группа",
+        "category_id": "workshops",
     })
     assert group.status_code == 201
     group_id = master.get("/api/master").json["services"][-1]["id"]

@@ -2,6 +2,8 @@
 from datetime import datetime, timedelta
 from werkzeug.security import generate_password_hash
 
+from backend.database.service_categories import backfill_categories, infer_category, initialize_categories
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS specialists(id INTEGER PRIMARY KEY,name TEXT,profession TEXT,category TEXT,experience INTEGER,education TEXT,skills TEXT,bio TEXT,photo TEXT,location TEXT,active INTEGER DEFAULT 1);
 CREATE TABLE IF NOT EXISTS users(id INTEGER PRIMARY KEY,name TEXT,email TEXT UNIQUE,password TEXT,role TEXT,specialist_id INTEGER REFERENCES specialists(id));
@@ -229,6 +231,7 @@ def initialize_database(connection, current_time):
         connection.execute('ALTER TABLE slots ADD COLUMN ends_at TEXT')
     migrate_service_moderation(connection)
     migrate_notifications(connection)
+    initialize_categories(connection)
     specialist_ids = {}
     for index, person in enumerate(PEOPLE, 1):
         keys = ['name','profession','category','experience','education','skills','bio']
@@ -249,9 +252,12 @@ def initialize_database(connection, current_time):
 
     service_ids = {}
     for index, (specialist, title, price, duration, mode) in enumerate(SERVICES, 1):
-        values = dict(specialist_id=specialist_ids[specialist], title=title, price=price, duration=duration, mode=mode)
+        values = dict(specialist_id=specialist_ids[specialist], title=title, price=price, duration=duration,
+                      mode=mode, category_id=infer_category(title, PEOPLE[specialist - 1][1]))
         service_ids[index] = ensure(connection, f'service:{index}', 'services',
                                     {'specialist_id': values['specialist_id'], 'title': title}, values, index)
+
+    backfill_categories(connection)
 
     anchor_row = connection.execute("SELECT value FROM seed_meta WHERE name='anchor_date'").fetchone()
     if anchor_row:
