@@ -275,8 +275,10 @@ def create_app(test_config=None):
                 (user['id'], now().isoformat(timespec='minutes'))).fetchone()
             if active:
                 return fail('Сначала отмените все предстоящие записи', 409)
-            c.execute('DELETE FROM notifications WHERE user_id=?', (user['id'],))
-            c.execute('DELETE FROM reviews WHERE user_id=?', (user['id'],))
+            c.execute('DELETE FROM notifications WHERE user_id=? OR booking_id IN (SELECT id FROM bookings WHERE user_id=?)',
+                      (user['id'], user['id']))
+            c.execute('DELETE FROM reviews WHERE user_id=? OR booking_id IN (SELECT id FROM bookings WHERE user_id=?)',
+                      (user['id'], user['id']))
             c.execute('DELETE FROM searches WHERE user_id=?', (user['id'],))
             c.execute('DELETE FROM password_reset_tokens WHERE user_id=?', (user['id'],))
             c.execute('DELETE FROM bookings WHERE user_id=?', (user['id'],))
