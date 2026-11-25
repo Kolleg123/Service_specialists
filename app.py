@@ -266,32 +266,98 @@ def create_app(test_config=None):
         return current()
 
     @app.delete('/api/account')
-    @auth('client')
+    @auth()
     def delete_account(user):
+        if user['role'] == 'client':
+            with db() as c:
+                active = c.execute(
+                    '''SELECT 1 FROM bookings b JOIN slots s ON s.id=b.slot_id
+                       WHERE b.user_id=? AND b.status='confirmed' AND s.starts_at>? LIMIT 1''',
+                    (user['id'], now().isoformat(timespec='minutes'))).fetchone()
+                if active:
+                    return fail('Сначала отмените все предстоящие записи', 409)
+                c.execute('DELETE FROM notifications WHERE user_id=? OR booking_id IN (SELECT id FROM bookings WHERE user_id=?)',
+                          (user['id'], user['id']))
+                c.execute('DELETE FROM reviews WHERE user_id=? OR booking_id IN (SELECT id FROM bookings WHERE user_id=?)',
+                          (user['id'], user['id']))
+                c.execute('DELETE FROM searches WHERE user_id=?', (user['id'],))
+                c.execute('DELETE FROM password_reset_tokens WHERE user_id=?', (user['id'],))
+                c.execute('DELETE FROM bookings WHERE user_id=?', (user['id'],))
+                c.execute('DELETE FROM users WHERE id=?', (user['id'],))
+            if user['avatar'] and user['avatar'].startswith('/uploads/'):
+                avatar_path = Path(app.config['UPLOAD_FOLDER']) / Path(user['avatar']).name
+                if avatar_path.exists():
+                    try:
+                        avatar_path.unlink()
+                    except OSError:
+                        pass
+            session.clear()
+            return current()
+
+        if user['role'] == 'master':
+            specialist_id = user['specialist_id']
+            if not specialist_id:
+                return fail('Профиль специалиста не найден', 404)
+            with db() as c:
+                active = c.execute(
+                    '''SELECT 1 FROM bookings b JOIN slots s ON s.id=b.slot_id
+                       WHERE s.specialist_id=? AND b.status='confirmed' AND s.starts_at>? LIMIT 1''',
+                    (specialist_id, now().isoformat(timespec='minutes'))).fetchone()
+                if active:
+                    return fail('Сначала отмените все предстоящие записи', 409)
+                c.execute('DELETE FROM notifications WHERE booking_id IN (SELECT id FROM bookings WHERE slot_id IN (SELECT id FROM slots WHERE specialist_id=?))', (specialist_id,))
+                c.execute('DELETE FROM reviews WHERE specialist_id=? OR booking_id IN (SELECT id FROM bookings WHERE slot_id IN (SELECT id FROM slots WHERE specialist_id=?))', (specialist_id, specialist_id))
+                c.execute('DELETE FROM bookings WHERE slot_id IN (SELECT id FROM slots WHERE specialist_id=?)', (specialist_id,))
+                c.execute('DELETE FROM slots WHERE specialist_id=?', (specialist_id,))
+                c.execute('DELETE FROM services WHERE specialist_id=?', (specialist_id,))
+                c.execute('DELETE FROM password_reset_tokens WHERE user_id=?', (user['id'],))
+                c.execute('DELETE FROM users WHERE id=?', (user['id'],))
+                c.execute('DELETE FROM specialists WHERE id=?', (specialist_id,))
+            if user['avatar'] and user['avatar'].startswith('/uploads/'):
+                avatar_path = Path(app.config['UPLOAD_FOLDER']) / Path(user['avatar']).name
+                if avatar_path.exists():
+                    try:
+                        avatar_path.unlink()
+                    except OSError:
+                        pass
+            session.clear()
+            return current()
+
+        return fail('Удаление этого аккаунта недоступно', 403)
+
+    @app.delete('/api/admin/specialists/<int:ident>')
+    @auth('admin')
+    def delete_specialist(user, ident):
         with db() as c:
+            specialist = c.execute('SELECT * FROM specialists WHERE id=?', (ident,)).fetchone()
+            if not specialist:
+                return fail('Специалист не найден', 404)
+            master = c.execute('SELECT id,avatar FROM users WHERE specialist_id=? AND role=?', (ident, 'master')).fetchone()
             active = c.execute(
                 '''SELECT 1 FROM bookings b JOIN slots s ON s.id=b.slot_id
-                   WHERE b.user_id=? AND b.status='confirmed' AND s.starts_at>? LIMIT 1''',
-                (user['id'], now().isoformat(timespec='minutes'))).fetchone()
+                   WHERE s.specialist_id=? AND b.status='confirmed' AND s.starts_at>? LIMIT 1''',
+                (ident, now().isoformat(timespec='minutes'))).fetchone()
             if active:
-                return fail('Сначала отмените все предстоящие записи', 409)
-            c.execute('DELETE FROM notifications WHERE user_id=? OR booking_id IN (SELECT id FROM bookings WHERE user_id=?)',
-                      (user['id'], user['id']))
-            c.execute('DELETE FROM reviews WHERE user_id=? OR booking_id IN (SELECT id FROM bookings WHERE user_id=?)',
-                      (user['id'], user['id']))
-            c.execute('DELETE FROM searches WHERE user_id=?', (user['id'],))
-            c.execute('DELETE FROM password_reset_tokens WHERE user_id=?', (user['id'],))
-            c.execute('DELETE FROM bookings WHERE user_id=?', (user['id'],))
-            c.execute('DELETE FROM users WHERE id=?', (user['id'],))
-        if user['avatar'] and user['avatar'].startswith('/uploads/'):
-            avatar_path = Path(app.config['UPLOAD_FOLDER']) / Path(user['avatar']).name
+                return fail('Сначала отмените все предстоящие записи специалиста', 409)
+            c.execute('DELETE FROM notifications WHERE booking_id IN (SELECT id FROM bookings WHERE slot_id IN (SELECT id FROM slots WHERE specialist_id=?))', (ident,))
+            c.execute('DELETE FROM reviews WHERE specialist_id=? OR booking_id IN (SELECT id FROM bookings WHERE slot_id IN (SELECT id FROM slots WHERE specialist_id=?))', (ident, ident))
+            c.execute('DELETE FROM bookings WHERE slot_id IN (SELECT id FROM slots WHERE specialist_id=?)', (ident,))
+            c.execute('DELETE FROM slots WHERE specialist_id=?', (ident,))
+            c.execute('DELETE FROM services WHERE specialist_id=?', (ident,))
+            if master:
+                c.execute('DELETE FROM password_reset_tokens WHERE user_id=?', (master['id'],))
+                c.execute('DELETE FROM users WHERE id=?', (master['id'],))
+        c.execute if False else None
+        with db() as c:
+            c.execute('DELETE FROM specialists WHERE id=?', (ident,))
+        if master and master['avatar'] and master['avatar'].startswith('/uploads/'):
+            avatar_path = Path(app.config['UPLOAD_FOLDER']) / Path(master['avatar']).name
             if avatar_path.exists():
                 try:
                     avatar_path.unlink()
                 except OSError:
                     pass
-        session.clear()
-        return current()
+        return jsonify(ok=True)
 
     @app.get('/uploads/<path:name>')
     def uploaded_file(name):
