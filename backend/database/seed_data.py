@@ -267,6 +267,15 @@ SERVICES = [(1, 'Устранение протечки', 1500, 60, 'Выезд')
  (6, 'Портретная фотосессия', 5000, 60, 'У специалиста'),
  (6, 'Мастер-класс по фотографии', 1200, 120, 'Группа')]
 
+DEMO_SERVICE_ADDRESSES = {
+    3: 'Киров, вымышленная ул. Локонная, 14',
+    4: 'Киров, вымышленная ул. Словарная, 7',
+    5: 'Киров, вымышленный пер. Тишины, 5',
+    6: 'Киров, вымышленная ул. Фотокадров, 21',
+}
+DEMO_CONTACT_INSTRUCTIONS = 'Демонстрационная услуга. Запись используется для знакомства с сервисом.'
+
+
 def ensure(connection, key, table, match, values, preferred_id=None):
     """Match old installs by natural key, then use persistent IDs to keep edits.
 
@@ -336,14 +345,22 @@ def initialize_database(connection, current_time, demo_mode):
 
 
 def seed_demo(connection, current_time):
+    # Fill pre-existing fixtures once so cleared or edited contacts stay as set on later starts.
+    upgrade_contacts = connection.execute(
+        "INSERT OR IGNORE INTO seed_meta(name,value) VALUES('sample_service_contacts','1')"
+    ).rowcount == 1
     specialist_ids = {}
     for index, person in enumerate(PEOPLE, 1):
         keys = ['name','profession','category','experience','education','skills','bio']
         values = dict(zip(keys, person[:7]))
-        values.update(photo=f'/static/photos/{index}.jpg', location=person[8],
+        values.update(photo=f'/static/photos/{index}.jpg', location=DEMO_SERVICE_ADDRESSES.get(index, person[8]),
                       category_group_id=profile_group(connection, person[2]))
         specialist_ids[index] = ensure(connection, f'specialist:{index}', 'specialists',
                                        {'name': person[0], 'profession': person[1]}, values, index)
+        if upgrade_contacts and values['location'] != person[8]:
+            connection.execute('''UPDATE specialists SET location=?
+                WHERE id=? AND location=? AND deleted=0''',
+                               (values['location'], specialist_ids[index], person[8]))
 
     deleted_specialists = {row['id'] for row in connection.execute('SELECT id FROM specialists WHERE deleted=1')}
     user_ids = {}
@@ -363,14 +380,23 @@ def seed_demo(connection, current_time):
     for index, (specialist, title, price, duration, mode) in enumerate(SERVICES, 1):
         if specialist_ids[specialist] in deleted_specialists:
             continue
+        person = PEOPLE[specialist - 1]
+        address = DEMO_SERVICE_ADDRESSES[specialist] if mode in ('У специалиста', 'Группа') else None
+        # 555-0100 through 555-0199 are reserved for fictional North American numbers.
+        phone = f'+1 (202) 555-{100 + specialist:04d}'
         values = dict(specialist_id=specialist_ids[specialist], title=title, price=price, duration=duration,
-                      mode=mode, category_id=active_category_id(
-                          connection, infer_category(title, PEOPLE[specialist - 1][1])))
-        if mode in ('У специалиста', 'Группа'):
-            values['service_address'] = PEOPLE[specialist - 1][8]
-        values['contact_instructions'] = 'Демонстрационная услуга. Запись используется для знакомства с сервисом.'
+                      mode=mode, category_id=active_category_id(connection, infer_category(title, person[1])),
+                      service_address=address, contact_phone=phone, contact_instructions=DEMO_CONTACT_INSTRUCTIONS)
         service_ids[index] = ensure(connection, f'service:{index}', 'services',
                                     {'specialist_id': values['specialist_id'], 'title': title}, values, index)
+        if upgrade_contacts:
+            connection.execute('''UPDATE services SET
+                service_address=CASE WHEN service_address IS NULL OR service_address=? THEN ? ELSE service_address END,
+                contact_phone=COALESCE(contact_phone,?),
+                contact_instructions=COALESCE(contact_instructions,?)
+                WHERE id=? AND specialist_id=? AND title=? AND mode=? AND deleted=0''',
+                               (person[8], address, phone, DEMO_CONTACT_INSTRUCTIONS, service_ids[index],
+                                values['specialist_id'], title, mode))
 
     anchor_row = connection.execute("SELECT value FROM seed_meta WHERE name='anchor_date'").fetchone()
     if anchor_row:

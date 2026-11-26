@@ -37,6 +37,7 @@ for (const {width, specialist, service, title, travel} of [
     await expect(place).toContainText(travel ? 'Специалист приедет по адресу' : 'Адрес приёма');
     await expect(place).toContainText('появятся в личном кабинете после записи');
     await expect(page.locator('#booking-flow')).not.toContainText('Запись используется для знакомства с сервисом.');
+    await expect(page.locator('#booking-flow')).not.toContainText('+1 (202) 555-010');
 
     await page.getByRole('button', {name: 'Выбрать дату и время'}).click();
     await page.locator('[data-day]').last().click();
@@ -55,7 +56,10 @@ for (const {width, specialist, service, title, travel} of [
     const first = page.locator('#booking-list .booking-row').first();
     await expect(first).toHaveAttribute('data-booking-id', String(id));
     await expect(first).toContainText(title);
-    await expect(first).toContainText(travel ? 'Киров, ул. Тестовая, 42' : 'Адрес приёма');
+    await expect(first).toContainText(travel ? 'Киров, ул. Тестовая, 42' : 'Киров, вымышленная ул. Локонная, 14');
+    await expect(first.getByRole('link', {name: `+1 (202) 555-010${specialist}`})).toHaveAttribute(
+      'href', `tel:+1202555010${specialist}`
+    );
     await expect(first).toContainText('Запись используется для знакомства с сервисом.');
     await page.reload();
     await expect(first).toHaveAttribute('data-booking-id', String(id));

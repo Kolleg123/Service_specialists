@@ -46,6 +46,41 @@ def test_repeat_does_not_duplicate_roll_forward_or_overwrite_user_changes(tmp_pa
     assert snapshot(path) == before
 
 
+def test_demo_services_receive_sample_contacts_on_first_start_and_upgrade(tmp_path):
+    path = tmp_path / 'contacts.sqlite'
+    initialize(path)
+    with connect(path) as c:
+        rows = c.execute('SELECT mode,service_address,contact_phone FROM services ORDER BY id').fetchall()
+        assert len(rows) == 11
+        assert all(row['contact_phone'].startswith('+1 (202) 555-010') for row in rows)
+        for row in rows:
+            if row['mode'] in ('Выезд', 'Онлайн'):
+                assert row['service_address'] is None
+            else:
+                assert row['service_address'].startswith('Киров, вымышленн')
+        # Simulate the prior demo seed, including edits and an independently added service.
+        c.execute("DELETE FROM seed_meta WHERE name='sample_service_contacts'")
+        c.execute('UPDATE services SET contact_phone=NULL,contact_instructions=NULL')
+        c.execute('UPDATE services SET service_address=? WHERE id=5', (PEOPLE[2][8],))
+        c.execute('UPDATE specialists SET location=? WHERE id=3', (PEOPLE[2][8],))
+        c.execute("""UPDATE services SET service_address='Своя студия',contact_phone='+1 (202) 555-0173',
+            contact_instructions='Свои инструкции' WHERE id=6""")
+        c.execute("INSERT INTO services(id,specialist_id,title,mode) VALUES(100,3,'Своя услуга','У специалиста')")
+    initialize(path)
+    with connect(path) as c:
+        upgraded = c.execute('SELECT service_address,contact_phone,contact_instructions FROM services WHERE id=5').fetchone()
+        assert tuple(upgraded) == (rows[4]['service_address'], rows[4]['contact_phone'],
+                                   'Демонстрационная услуга. Запись используется для знакомства с сервисом.')
+        assert c.execute('SELECT location FROM specialists WHERE id=3').fetchone()[0] == upgraded['service_address']
+        assert tuple(c.execute('SELECT service_address,contact_phone,contact_instructions FROM services WHERE id=6').fetchone()) == (
+            'Своя студия', '+1 (202) 555-0173', 'Свои инструкции')
+        assert c.execute('SELECT contact_phone FROM services WHERE id=100').fetchone()[0] is None
+        c.execute('UPDATE services SET contact_phone=NULL WHERE id=5')
+    before = snapshot(path)
+    initialize(path)
+    assert snapshot(path) == before
+
+
 def test_legacy_partial_database_with_one_specialist_is_repaired(tmp_path):
     path = tmp_path / 'partial.sqlite'
     with connect(path) as c:
