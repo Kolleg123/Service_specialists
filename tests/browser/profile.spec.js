@@ -12,7 +12,7 @@ async function post(page, path, data) {
 
 async function register(page, email) {
  await page.goto('/');
- const registration = await post(page, '/register', {name:'Тестовый пользователь', email, password:'BrowserTest123'});
+ const registration = await post(page, '/register', {name:'Тестовый пользователь', username:email.split('@')[0].replace(/[^a-z0-9]/gi,'').slice(0,20), email, password:'BrowserTest123'});
  expect(registration.status()).toBe(200);
  await page.goto('/#dashboard');
  await page.reload();
