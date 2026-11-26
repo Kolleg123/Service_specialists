@@ -12,7 +12,7 @@ test('request an email link, reset the password and sign in again', async ({ pag
   await page.locator('#auth-switch').click();
   await page.getByLabel('Ваше имя').fill('Тест восстановления');
   await page.getByLabel('Логин').fill(username);
-  await page.getByLabel('Логин').fill(username);
+  await page.getByLabel('Электронная почта').fill(email);
   await page.getByLabel('Пароль', { exact: true }).fill(originalPassword);
   await page.locator('#login-form button').click();
   await expect(page.locator('.dashboard')).toBeVisible();
@@ -35,10 +35,10 @@ test('request an email link, reset the password and sign in again', async ({ pag
   await expect(page.getByRole('heading', { name: 'Пароль изменён' })).toBeVisible();
 
   await page.locator('#reset-login').click();
-  await page.getByLabel('Электронная почта').fill(email);
+  await page.getByLabel('Логин').fill(username);
   await page.getByLabel('Пароль', { exact: true }).fill(originalPassword);
   await page.locator('#login-form button').click();
-  await expect(page.locator('#login-form .form-error')).toContainText('Неверная почта или пароль');
+  await expect(page.locator('#login-form .form-error')).toContainText('Неверный логин или пароль');
   await page.getByLabel('Пароль', { exact: true }).fill(newPassword);
   await page.locator('#login-form button').click();
   await expect(page.locator('.dashboard')).toBeVisible();
