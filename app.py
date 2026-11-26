@@ -899,15 +899,21 @@ def create_app(test_config=None):
         kind, ident = d.get('kind'), d.get('id')
         with db() as c:
             if kind == 'review' and d.get('status') in ['approved', 'rejected']:
+                old_state = c.execute('SELECT status FROM reviews WHERE id=?', (ident,)).fetchone()
                 cur = c.execute('UPDATE reviews SET status=? WHERE id=?', (d['status'], ident))
+                new_state = {'status': d['status']}
             elif kind in ['specialist', 'service'] and type(d.get('active')) is bool:
                 table = 'specialists' if kind == 'specialist' else 'services'
                 scope = ' AND deleted=0'
+                old_state = c.execute(f'SELECT active FROM {table} WHERE id=?{scope}', (ident,)).fetchone()
                 cur = c.execute(f'UPDATE {table} SET active=? WHERE id=?{scope}', (int(d['active']), ident))
+                new_state = {'active': bool(d['active'])}
             else:
                 return fail('Некорректное действие модерации')
             if not cur.rowcount:
                 return fail('Объект не найден', 404)
+            audit(c, user['id'], 'moderation', kind, ident,
+                  dict(old_state) if old_state else None, new_state, d.get('reason'))
         return jsonify(ok=True)
 
     init_db(app, db)
