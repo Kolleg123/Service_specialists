@@ -14,7 +14,7 @@ def app(tmp_path):
 def client(app, role='client'):
     c = app.test_client()
     token = c.get('/api/session').json['csrf']
-    r = c.post('/api/login', json={'email': role + '@svobodno.demo', 'password': 'Demo2026!'}, headers={'X-CSRF-Token': token})
+    r = c.post('/api/login', json={'username': role, 'password': 'Demo2026!'}, headers={'X-CSRF-Token': token})
     assert r.status_code == 200
     return c
 
@@ -128,7 +128,7 @@ def test_moderation_blocks_booking(app):
 
 def test_registration_and_search_history(app):
     c = app.test_client()
-    d = {'name': 'Новый клиент', 'email': 'new@example.test', 'password': 'testpassword'}
+    d = {'name': 'Новый клиент', 'username': 'newclient', 'email': 'new@example.test', 'password': 'testpassword'}
     result = post(c, '/register', d)
     assert result.status_code == 200
     assert result.json['user']['role'] == 'client'
