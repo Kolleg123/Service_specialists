@@ -84,7 +84,7 @@ def deliver_pending(connection, current_time, limit=50):
             connection.execute(
                 """UPDATE outgoing_notifications
                    SET status=?,attempts=?,next_attempt_at=?,last_error=? WHERE id=?""",
-                (status, attempts, next_time, str(error)[:500], row['id']))
+                (status, attempts, next_time, str(error)[:500], row[0]))
             failed += 1
     return {'sent': sent, 'failed': failed, 'processed': sent + failed}
 
