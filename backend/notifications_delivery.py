@@ -70,14 +70,14 @@ def deliver_pending(connection, current_time, limit=50):
     sent = failed = 0
     for row in rows:
         try:
-            adapter().send(json.loads(row['payload']))
+            adapter().send(json.loads(row[5]))
             connection.execute(
                 """UPDATE outgoing_notifications
                    SET status='delivered',delivered_at=?,last_error=NULL WHERE id=?""",
-                (current_time, row['id']))
+                (current_time, row[0]))
             sent += 1
         except Exception as error:
-            attempts = row['attempts'] + 1
+            attempts = row[7] + 1
             status = 'failed' if attempts >= MAX_ATTEMPTS else 'retry'
             delay = min(60 * (2 ** max(attempts - 1, 0)), 3600)
             next_time = (current_time + timedelta(seconds=delay)).isoformat(timespec='seconds')
