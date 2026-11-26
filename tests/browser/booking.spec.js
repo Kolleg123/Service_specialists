@@ -159,7 +159,12 @@ test('catalog network failure has a working retry instead of an endless spinner'
 });
 
 test('recovers the booking when the server response is lost', async ({page}) => {
-  await login(page);
+  const session = await (await page.request.get('/api/session')).json();
+  const registration = await page.request.post('/api/register', {
+    headers: {'X-CSRF-Token': session.csrf},
+    data: {name: 'Тест повторной записи', email: 'booking-retry@example.test', password: 'LocalTest123'}
+  });
+  expect(registration.ok()).toBe(true);
   await openBooking(page);
   await chooseTime(page);
   await page.getByRole('button', {name:'Продолжить'}).click();
@@ -177,7 +182,12 @@ test('recovers the booking when the server response is lost', async ({page}) => 
   await page.getByRole('button', {name:'Подтвердить запись'}).click();
   await expect(page.getByLabel('Адрес выезда')).toHaveValue('Киров, Ленина 10');
   await page.getByRole('button', {name:'Проверить запись'}).click();
-  await expect(page.locator('#booking-list [data-booking-id]')).toHaveCount(2);
+  await expect(page.locator('#booking-list [data-booking-id]')).toHaveCount(1);
   await expect(page.locator(`[data-booking-id="${bookedId}"]`)).toHaveCount(1);
   expect(keys).toEqual([expect.any(String), keys[0]]);
+  const signedIn = await (await page.request.get('/api/session')).json();
+  const cancellation = await page.request.post(`/api/bookings/${bookedId}/cancel`, {
+    headers: {'X-CSRF-Token': signedIn.csrf}, data: {}
+  });
+  expect(cancellation.ok()).toBe(true);
 });
