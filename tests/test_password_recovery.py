@@ -1,9 +1,13 @@
 import hashlib
 from datetime import timedelta
+from email import policy
+from email.parser import BytesParser
+from unittest.mock import MagicMock
 
 import pytest
 
 from app import create_app, now
+from backend.auth.password_recovery import send_recovery_email
 
 
 sent = []
@@ -105,11 +109,37 @@ def test_smtp_error_is_not_exposed(app):
     assert 'sensitive' not in response.get_data(as_text=True)
 
 
+def test_smtp_from_header_round_trip(monkeypatch):
+    smtp = MagicMock()
+    monkeypatch.setattr('backend.auth.password_recovery.smtplib.SMTP', smtp)
+    send_recovery_email(
+        {'SMTP_HOST': 'smtp.example.test', 'SMTP_FROM_EMAIL': 'sender@example.test'},
+        'recipient@example.test', 'Тест', 'https://example.test/reset-password',
+    )
+
+    send_message = smtp.return_value.__enter__.return_value.send_message
+    send_message.assert_called_once()
+    message = send_message.call_args.args[0]
+    parsed = BytesParser(policy=policy.default).parsebytes(message.as_bytes(policy=policy.SMTP))
+    assert not parsed.defects
+    assert not parsed['From'].defects
+    address, = parsed['From'].addresses
+    assert address.display_name == 'Свободно.'
+    assert address.addr_spec == 'sender@example.test'
+
+
 def test_rate_limit(app):
-    app.config['PASSWORD_RESET_LIMIT'] = 2
+    assert app.config['PASSWORD_RESET_LIMIT'] == 30
+    assert app.config['PASSWORD_RESET_WINDOW_MINUTES'] == 60
+    assert app.config['PASSWORD_RESET_TTL_MINUTES'] == 30
     client = app.test_client()
-    for _ in range(2):
-        assert post(client, '/password-reset/request', {'email': 'client@svobodno.demo'}).status_code == 200
-    before = len(sent)
-    assert post(client, '/password-reset/request', {'email': 'client@svobodno.demo'}).status_code == 200
-    assert len(sent) == before
+    payload = {'email': 'client@svobodno.demo'}
+    for _ in range(30):
+        allowed = post(client, '/password-reset/request', payload)
+        assert allowed.status_code == 200
+    assert len(sent) == 30
+
+    blocked = post(client, '/password-reset/request', payload)
+    assert blocked.status_code == 200
+    assert blocked.json == allowed.json
+    assert len(sent) == 30
