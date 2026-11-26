@@ -158,6 +158,6 @@ def retire_account(connection, user_id, current_time):
     connection.execute("""UPDATE support_requests SET sender_name=?,sender_email='',
         status=CASE WHEN status='pending' THEN 'cancelled' ELSE status END WHERE user_id=?""",
         (DELETED_NAME, user_id))
-    connection.execute("""UPDATE users SET name=?,email=NULL,password='',role='deleted',
+    connection.execute("""UPDATE users SET name=?,username=NULL,email=NULL,password='',role='deleted',
         avatar=NULL,specialist_id=NULL WHERE id=?""", (DELETED_NAME, user_id))
     return user['avatar'], photo
