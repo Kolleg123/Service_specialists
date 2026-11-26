@@ -1,0 +1,27 @@
+"""Idempotent reminder scheduling for upcoming confirmed bookings."""
+from datetime import timedelta
+from backend.notifications_delivery import enqueue
+
+
+def schedule_reminders(connection, current_time, lead_minutes=(1440, 60)):
+    window_end = current_time + timedelta(days=2)
+    rows = connection.execute("""SELECT b.id,b.user_id,b.starts_at,b.status,v.title
+        FROM bookings b JOIN slots s ON s.id=b.slot_id JOIN services v ON v.id=s.service_id
+        WHERE b.status='confirmed' AND s.starts_at>? AND s.starts_at<=?
+        ORDER BY s.starts_at""", (current_time.isoformat(timespec='minutes'), window_end.isoformat(timespec='minutes'))).fetchall()
+    created = 0
+    for booking in rows:
+        from datetime import datetime
+        start = datetime.fromisoformat(booking['starts_at'])
+        for minutes in lead_minutes:
+            due = start - timedelta(minutes=minutes)
+            if due > current_time:
+                continue
+            kind = f'reminder_{minutes}m'
+            key = f'booking:{booking["id"]}:{kind}'
+            before = connection.total_changes
+            enqueue(connection, key, booking['user_id'], kind,
+                    f'Напоминание о записи: {booking["title"]} — {start:%d.%m.%Y %H:%M}',
+                    current_time, booking_id=booking['id'])
+            created += connection.total_changes - before
+    return created
