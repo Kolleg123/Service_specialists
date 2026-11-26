@@ -27,18 +27,30 @@ def account(connection, user_id):
 
 
 def update_details(connection, user_id, data):
+    if 'username' in data or 'login' in data:
+        raise ProfileError('Логин нельзя изменить после регистрации', 400)
     name = data.get('name', '')
+    email = data.get('email')
     passwords = [data.get(key, '') for key in ('current_password', 'new_password', 'confirmation')]
     if not isinstance(name, str) or not 2 <= len(name.strip()) <= 80:
         raise ProfileError('ФИО должно содержать от 2 до 80 символов')
+    if email is not None and (not isinstance(email, str) or len(email.strip()) > 120 or
+                              not re.fullmatch(r'[^\s@]+@[^\s@]+\.[^\s@]+', email.strip())):
+        raise ProfileError('Укажите корректный адрес электронной почты')
     if not all(isinstance(value, str) and len(value) <= 128 for value in passwords):
         raise ProfileError('Пароль должен содержать не более 128 символов')
     name = name.strip()
+    email = email.strip().lower() if isinstance(email, str) else None
     current, new, confirmation = passwords
     connection.execute('BEGIN IMMEDIATE')
     user = account(connection, user_id)
     if not user:
         raise ProfileError('Войдите в личный кабинет', 401)
+    if email is not None and email != user['email']:
+        if connection.execute('SELECT 1 FROM users WHERE email=? AND id!=?', (email, user_id)).fetchone():
+            raise ProfileError('Эта почта уже используется другим аккаунтом', 409)
+        connection.execute('UPDATE users SET email=? WHERE id=?', (email, user_id))
+        connection.execute('DELETE FROM password_reset_tokens WHERE user_id=?', (user_id,))
     if any(passwords):
         if not check_password_hash(user['password'], current):
             raise ProfileError('Текущий пароль указан неверно', 403)
