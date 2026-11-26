@@ -157,3 +157,21 @@ test('catalog network failure has a working retry instead of an endless spinner'
   await page.getByRole('button',{name:'Повторить загрузку'}).click();
   await expect(page.locator('.specialist-card')).toHaveCount(6);
 });
+
+
+
+test('selected slot and booking form stay available after signing in', async ({page}) => {
+  await openBooking(page);
+  await chooseTime(page);
+  await page.getByRole('button', {name:'Продолжить'}).click();
+  const summary = await page.locator('.confirmation-summary').innerText();
+  await page.locator('#book-form textarea[name="note"]').fill('Проверка сохранения комментария');
+  await page.getByRole('button', {name:'Войти и записаться'}).click();
+  await page.getByLabel('Электронная почта').fill('client@svobodno.demo');
+  await page.getByLabel('Пароль').fill('Demo2026!');
+  await page.getByRole('button', {name:'Войти →'}).click();
+  await expect(page.locator('#booking-flow')).toBeVisible();
+  await expect(page.locator('.confirmation-summary')).toHaveText(summary);
+  await expect(page.locator('#book-form textarea[name="note"]')).toHaveValue('Проверка сохранения комментария');
+  await expect(page.locator('#booking-notice')).toContainText('Данные записи сохранены');
+});
