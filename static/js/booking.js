@@ -281,6 +281,14 @@ class BookingFlow {
   async submit() {
     if (this.submitting || !this.slot) return;
     if (!state.user) {
+      const form = $('#book-form');
+      if (form) {
+        this.fields = {
+          address: form.elements.address?.value || '',
+          note: form.elements.note.value,
+          quantity: Number(form.elements.quantity.value)
+        };
+      }
       const pending = {
         specialist: this.specialist,
         serviceId: this.serviceId,
