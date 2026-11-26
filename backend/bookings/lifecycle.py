@@ -67,6 +67,8 @@ def store_transition(connection, booking_id, target, current_time, reason=None, 
     if actor_id is not None:
         audit(connection, actor_id, 'booking_transition', 'booking', booking_id,
               dict(before) if before else None, {'status': target, 'cancel_reason': reason}, reason)
+    if target == 'cancelled':
+        connection.execute("DELETE FROM outgoing_notifications WHERE booking_id=? AND event LIKE 'reminder_%' AND status IN ('pending','retry')", (booking_id,))
     notify_booking(connection, booking_id, target, current_time)
 
 
