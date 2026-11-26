@@ -16,6 +16,10 @@ from backend.bookings.schedule import save_schedule, schedule_for
 from backend.bookings.service import BookingError, available_slots, create_booking
 from backend.bookings.lifecycle import (CUSTOMER_ROLES, booking_interval, booking_policy, cancellation_reason,
                                store_transition, transition_booking, upcoming_master_bookings)
+from backend.audit import audit
+from backend.notifications_delivery import deliver_pending
+from backend.bookings.reminders import schedule_reminders
+from backend.backup import backup_database, restore_database, check_database
 from backend.auth.password_recovery import send_recovery_email
 from backend.auth.profile import (AVATAR_NAME, IMAGE_TYPES, ProfileError, account, remove_unused_avatars,
                                   retire_account, retire_specialist, set_avatar, update_details, validate_avatar)
@@ -444,6 +448,55 @@ def create_app(test_config=None):
                 return dict(kind='application', mode='client', tab='specialist-application', item=dict(row))
         return None
 
+    @app.get('/api/admin/audit')
+    @auth('admin')
+    def admin_audit(user):
+        limit = min(max(request.args.get('limit', default=50, type=int), 1), 200)
+        with db() as c:
+            rows = c.execute("""SELECT a.*,u.name actor_name FROM audit_log a
+                LEFT JOIN users u ON u.id=a.actor_id ORDER BY a.id DESC LIMIT ?""", (limit,)).fetchall()
+        return jsonify(entries=[dict(row) for row in rows])
+
+    @app.post('/api/admin/notifications/deliver')
+    @auth('admin')
+    def deliver_notifications(user):
+        with db() as c:
+            result = deliver_pending(c, now())
+        return jsonify(result=result)
+
+    @app.post('/api/admin/reminders/run')
+    @auth('admin')
+    def run_reminders(user):
+        with db() as c:
+            created = schedule_reminders(c, now())
+        return jsonify(created=created)
+
+    @app.post('/api/admin/backup')
+    @auth('admin')
+    def backup():
+        path = Path(app.instance_path) / 'backups' / f'backup-{now():%Y%m%d-%H%M%S}.sqlite'
+        return jsonify(path=backup_database(app.config['DATABASE'], path), integrity='ok')
+
+    @app.post('/api/admin/restore-check')
+    @auth('admin')
+    def restore_check(user):
+        data = request.get_json()
+        source = str(data.get('path', '')).strip()
+        if not source:
+            return fail('Укажите путь к резервной копии')
+        restored = Path(app.instance_path) / 'backups' / 'restore-check.sqlite'
+        restore_database(source, restored)
+        return jsonify(path=str(restored), integrity=check_database(restored))
+
+    @app.get('/api/admin/notifications')
+    @auth('admin')
+    def outgoing_notifications(user):
+        with db() as c:
+            rows = c.execute("""SELECT id,event_key,recipient_id,booking_id,event,status,attempts,
+                next_attempt_at,last_error,created_at,delivered_at
+                FROM outgoing_notifications ORDER BY id DESC LIMIT 200""").fetchall()
+        return jsonify(notifications=[dict(row) for row in rows])
+
     @app.get('/api/dashboard')
     @auth()
     def dashboard(user):
@@ -530,7 +583,7 @@ def create_app(test_config=None):
                 if expected_ids != ids:
                     return fail('Список предстоящих записей изменился. Откройте подтверждение заново.', 409)
                 for ident in ids:
-                    store_transition(c, ident, 'cancelled', current_time, reason)
+                    store_transition(c, ident, 'cancelled', current_time, reason, user['id'])
         except BookingError as error:
             return fail(str(error), error.status)
         return jsonify(cancelled=len(ids))
@@ -846,15 +899,21 @@ def create_app(test_config=None):
         kind, ident = d.get('kind'), d.get('id')
         with db() as c:
             if kind == 'review' and d.get('status') in ['approved', 'rejected']:
+                old_state = c.execute('SELECT status FROM reviews WHERE id=?', (ident,)).fetchone()
                 cur = c.execute('UPDATE reviews SET status=? WHERE id=?', (d['status'], ident))
+                new_state = {'status': d['status']}
             elif kind in ['specialist', 'service'] and type(d.get('active')) is bool:
                 table = 'specialists' if kind == 'specialist' else 'services'
                 scope = ' AND deleted=0'
+                old_state = c.execute(f'SELECT active FROM {table} WHERE id=?{scope}', (ident,)).fetchone()
                 cur = c.execute(f'UPDATE {table} SET active=? WHERE id=?{scope}', (int(d['active']), ident))
+                new_state = {'active': bool(d['active'])}
             else:
                 return fail('Некорректное действие модерации')
             if not cur.rowcount:
                 return fail('Объект не найден', 404)
+            audit(c, user['id'], 'moderation', kind, ident,
+                  dict(old_state) if old_state else None, new_state, d.get('reason'))
         return jsonify(ok=True)
 
     init_db(app, db)
