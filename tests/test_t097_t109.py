@@ -74,10 +74,11 @@ def test_notification_retry_and_idempotency(app, monkeypatch):
     assert booking.status_code == 201
     import backend.notifications_delivery as delivery
     calls = {'n': 0}
-    def fail(payload):
-        calls['n'] += 1
-        raise delivery.DeliveryError('test delivery failure')
-    monkeypatch.setattr(delivery, 'adapter', lambda: type('A', (), {'send': fail})())
+    class FailingAdapter:
+        def send(self, payload):
+            calls['n'] += 1
+            raise delivery.DeliveryError('test delivery failure')
+    monkeypatch.setattr(delivery, 'adapter', lambda: FailingAdapter())
     with sqlite3.connect(app.config['DATABASE']) as con:
         con.execute("DELETE FROM outgoing_notifications WHERE booking_id<>? OR event<>'confirmed'", (booking.json['id'],))
         before = con.execute(
