@@ -17,12 +17,15 @@ function renderAccountProfile(root, user) {
    <section><h3>Личные данные</h3>
     <div id="profile-view" class="profile-view">
      <p><span>ФИО</span><strong>${esc(user.name)}</strong></p>
-     <p><span>Электронная почта</span><strong>${esc(user.email)}</strong></p>
+     <p><span>Неизменяемый логин</span><strong>${esc(user.username || '—')}</strong></p>
+     <p><span>Электронная почта</span><strong>${esc(user.email || '—')}</strong></p>
      <button id="edit-profile" class="button">Изменить данные</button>
     </div>
     <form id="profile-form" hidden>
      <label class="field">ФИО<input name="name" value="${esc(user.name)}" minlength="2" maxlength="80" required></label>
-     <p class="profile-email-note">Электронная почта используется для входа и восстановления пароля.</p>
+     <label class="field">Логин<input value="${esc(user.username || '—')}" disabled readonly></label>
+     <label class="field">Электронная почта<input name="email" type="email" value="${esc(user.email || '')}" maxlength="120" autocomplete="email" required></label>
+     <p class="profile-email-note">Почта используется для восстановления пароля. Логин остаётся неизменным.</p>
      <h3 class="settings-subtitle">Смена пароля</h3>
      <label class="field">Текущий пароль<input id="profile-current-password" name="current_password" type="password" autocomplete="current-password"></label>
      <label class="field">Новый пароль<input id="profile-new-password" name="new_password" type="password" minlength="8" maxlength="128" autocomplete="new-password"></label>
