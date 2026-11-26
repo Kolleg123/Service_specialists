@@ -1,5 +1,6 @@
 """Create inbox notifications inside the caller's booking transaction."""
 from datetime import datetime
+from backend.notifications_delivery import enqueue
 
 
 MESSAGES = {
@@ -31,3 +32,6 @@ def notify_booking(connection, booking_id, event, current_time):
         VALUES(?,?,?,?,?) ON CONFLICT(user_id,booking_id,event) WHERE payment_id IS NULL DO NOTHING''',
         [(user_id, booking_id, event, message + details,
           created_at) for user_id, message in recipients])
+    for user_id, message in recipients:
+        enqueue(connection, f'booking:{booking_id}:{event}:{user_id}', user_id, event,
+                message + details, current_time, booking_id=booking_id)

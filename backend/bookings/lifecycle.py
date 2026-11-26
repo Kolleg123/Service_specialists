@@ -3,6 +3,7 @@ from datetime import timedelta
 
 from backend.bookings.notifications import notify_booking
 from backend.bookings.service import BookingError, parse_start
+from backend.audit import audit
 
 
 CUSTOMER_ROLES = ('client', 'master')
@@ -57,11 +58,17 @@ def upcoming_master_bookings(connection, user, current_time):
     return [row['id'] for row in rows if parse_start(row['starts_at']) > current_time]
 
 
-def store_transition(connection, booking_id, target, current_time, reason=None):
+def store_transition(connection, booking_id, target, current_time, reason=None, actor_id=None):
+    before = connection.execute('SELECT status,cancel_reason FROM bookings WHERE id=?', (booking_id,)).fetchone()
     changed = connection.execute("""UPDATE bookings SET status=?,cancel_reason=?
         WHERE id=? AND status='confirmed'""", (target, reason, booking_id)).rowcount
     if changed != 1:
         raise BookingError('Статус записи изменился. Обновите список.', 409)
+    if actor_id is not None:
+        audit(connection, actor_id, 'booking_transition', 'booking', booking_id,
+              dict(before) if before else None, {'status': target, 'cancel_reason': reason}, reason)
+    if target == 'cancelled':
+        connection.execute("DELETE FROM outgoing_notifications WHERE booking_id=? AND event LIKE 'reminder_%' AND status IN ('pending','retry')", (booking_id,))
     notify_booking(connection, booking_id, target, current_time)
 
 
@@ -95,4 +102,4 @@ def transition_booking(connection, user, booking_id, action, clock, reason=None)
     target = 'completed' if action == 'complete' else 'cancelled'
     if not (action == 'cancel' and user['role'] == 'master' and user['specialist_id'] == booking['specialist_id']):
         reason = None
-    store_transition(connection, booking_id, target, current_time, reason)
+    store_transition(connection, booking_id, target, current_time, reason, user['id'])

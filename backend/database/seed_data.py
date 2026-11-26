@@ -33,6 +33,42 @@ CREATE INDEX IF NOT EXISTS password_reset_rate_ip ON password_reset_requests(ip_
 CREATE INDEX IF NOT EXISTS password_reset_rate_email ON password_reset_requests(email_hash,created_at);
 CREATE INDEX IF NOT EXISTS booking_slot ON bookings(slot_id,status);
 CREATE INDEX IF NOT EXISTS slot_specialist ON slots(specialist_id,starts_at);
+CREATE TABLE IF NOT EXISTS outgoing_notifications(
+    id INTEGER PRIMARY KEY,
+    event_key TEXT NOT NULL UNIQUE,
+    recipient_id INTEGER NOT NULL REFERENCES users(id),
+    booking_id INTEGER REFERENCES bookings(id) ON DELETE CASCADE,
+    event TEXT NOT NULL,
+    payload TEXT NOT NULL,
+    status TEXT NOT NULL CHECK(status IN ('pending','retry','delivered','failed')),
+    attempts INTEGER NOT NULL DEFAULT 0,
+    next_attempt_at TEXT,
+    last_error TEXT,
+    created_at TEXT NOT NULL,
+    delivered_at TEXT
+);
+CREATE INDEX IF NOT EXISTS outgoing_due ON outgoing_notifications(status,next_attempt_at,id);
+CREATE TABLE IF NOT EXISTS audit_log(
+    id INTEGER PRIMARY KEY,
+    actor_id INTEGER REFERENCES users(id),
+    action TEXT NOT NULL,
+    object_type TEXT NOT NULL,
+    object_id INTEGER,
+    old_state TEXT,
+    new_state TEXT,
+    reason TEXT,
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS audit_object ON audit_log(object_type,object_id,id DESC);
+CREATE INDEX IF NOT EXISTS audit_actor ON audit_log(actor_id,id DESC);
+CREATE TABLE IF NOT EXISTS notification_reminders(
+    id INTEGER PRIMARY KEY,
+    booking_id INTEGER NOT NULL REFERENCES bookings(id) ON DELETE CASCADE,
+    kind TEXT NOT NULL,
+    due_at TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'scheduled',
+    UNIQUE(booking_id,kind)
+);
 
 CREATE TABLE IF NOT EXISTS specialist_applications(
     id INTEGER PRIMARY KEY,
