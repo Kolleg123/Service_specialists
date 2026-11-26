@@ -160,8 +160,12 @@ def create_app(test_config=None):
     @app.post('/api/login')
     def login():
         data = request.get_json()
+        identifier = str(data.get('identifier') or data.get('username') or '').strip().lower()
         with db() as c:
-            user = c.execute('SELECT * FROM users WHERE username=?', (str(data.get('username', '')).strip().lower(),)).fetchone()
+            user = c.execute(
+                'SELECT * FROM users WHERE username=? OR email=? COLLATE NOCASE',
+                (identifier, identifier),
+            ).fetchone()
         if not user or not check_password_hash(user['password'], str(data.get('password', ''))):
             return fail('Неверный логин или пароль', 401)
         session.clear()
