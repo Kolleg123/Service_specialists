@@ -78,8 +78,8 @@ test('specialist updates their public name and photo, and admin removes only the
   await page.locator('#dashboard-mode').selectOption('client');
   await page.getByRole('button', {name:'Профиль', exact:true}).click();
   await page.getByRole('button', {name:'Изменить данные'}).click();
-  await page.getByRole('button', {name:'Изменить данные'}).click();
   await page.getByLabel('ФИО').fill('ФИО после обновления');
+  await page.getByLabel('Электронная почта').fill('profile-updated@example.test');
   await page.getByRole('button', {name:'Сохранить изменения'}).click();
   await expect(page.locator('#toast')).toContainText('Профиль сохранён');
   const avatar = page.locator('#avatar-file');
@@ -96,6 +96,8 @@ test('specialist updates their public name and photo, and admin removes only the
   await page.locator('#dashboard-mode').selectOption('master');
   await page.getByRole('button', {name:'Профиль', exact:true}).click();
   await expect(page.locator('#profile-view')).toContainText('ФИО после обновления');
+  await expect(page.locator('#profile-view')).toContainText('profile-updated@example.test');
+  await expect(page.locator('#profile-view')).toContainText('Неизменяемый логин');
   await expect(page.locator('#profile-form')).toBeHidden();
 
   await page.goto('/#catalog');
