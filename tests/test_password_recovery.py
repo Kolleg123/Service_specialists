@@ -63,9 +63,9 @@ def test_successful_reset_and_single_use(app):
     response = post(client, '/password-reset/confirm', {
         'token': token, 'password': 'NewPassword123', 'confirmation': 'NewPassword123'})
     assert response.status_code == 200
-    old_login = post(client, '/login', {'email': 'client@svobodno.demo', 'password': 'Demo2026!'})
+    old_login = post(client, '/login', {'username': 'client', 'password': 'Demo2026!'})
     assert old_login.status_code == 401
-    login = post(client, '/login', {'email': 'client@svobodno.demo', 'password': 'NewPassword123'})
+    login = post(client, '/login', {'username': 'client', 'password': 'NewPassword123'})
     assert login.status_code == 200
     assert post(client, '/password-reset/confirm', {
         'token': token, 'password': 'AnotherPass123', 'confirmation': 'AnotherPass123'}).status_code == 400
