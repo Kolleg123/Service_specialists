@@ -1,6 +1,7 @@
 """SMTP delivery for password recovery messages."""
 import smtplib
 import ssl
+from email.headerregistry import Address
 from email.message import EmailMessage
 
 
@@ -11,7 +12,10 @@ def send_recovery_email(config, recipient, display_name, reset_url):
         raise RuntimeError('SMTP is not configured')
     message = EmailMessage()
     message['Subject'] = 'Восстановление пароля — Свободно.'
-    message['From'] = f"{config.get('SMTP_FROM_NAME', 'Свободно.')} <{sender}>"
+    message['From'] = Address(
+        display_name=config.get('SMTP_FROM_NAME', 'Свободно.'),
+        addr_spec=sender
+    )
     message['To'] = recipient
     message.set_content(
         f"Здравствуйте, {display_name}!\n\n"
