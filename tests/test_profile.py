@@ -144,16 +144,19 @@ def test_delete_dual_role_account_preserves_shared_history_after_restart(app, tm
 
 
 def test_client_deletion_blocks_booking_and_releases_email_without_reviving_old_session(app):
-    customer = client(app)
-    stale_session = client(app)
+    customer, stale_session = app.test_client(), app.test_client()
+    email, password = 'deletion@example.test', 'OldPassword123'
+    assert post(customer, '/register', {'email': email, 'name': 'Клиент',
+                                        'password': password}).status_code == 200
+    assert post(stale_session, '/login', {'email': email, 'password': password}).status_code == 200
     booking = make_booking(customer, 1)
     assert mutate(customer, 'DELETE', '/account').status_code == 409
     assert post(customer, f'/bookings/{booking}/cancel', {}).status_code == 200
     assert mutate(customer, 'DELETE', '/account').status_code == 200
     restarted = create_app(dict(app.config))
     public = restarted.test_client()
-    assert post(public, '/login', {'email': 'client@svobodno.demo', 'password': 'Demo2026!'}).status_code == 401
-    assert post(public, '/register', {'email': 'client@svobodno.demo', 'name': 'Новый клиент',
+    assert post(public, '/login', {'email': email, 'password': password}).status_code == 401
+    assert post(public, '/register', {'email': email, 'name': 'Новый клиент',
                                       'password': 'NewPassword123'}).status_code == 200
     assert stale_session.get('/api/session').json['user'] is None
 
