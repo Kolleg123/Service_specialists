@@ -181,12 +181,14 @@ def create_app(test_config=None):
             return fail('Укажите корректную почту и пароль от 8 до 128 символов')
         try:
             with db() as c:
+                if c.execute('SELECT 1 FROM users WHERE username=?', (username,)).fetchone():
+                    return fail('Этот логин уже занят', 409)
+                if c.execute('SELECT 1 FROM users WHERE email=? COLLATE NOCASE', (email,)).fetchone():
+                    return fail('Эта почта уже зарегистрирована', 409)
                 uid = c.execute('INSERT INTO users(name,username,email,password,role) VALUES(?,?,?,?,?)',
                                 (name, username, email, generate_password_hash(password), 'client')).lastrowid
         except sqlite3.IntegrityError:
-            with db() as c:
-                duplicate_login = c.execute('SELECT 1 FROM users WHERE username=?', (username,)).fetchone()
-            return fail('Этот логин уже занят' if duplicate_login else 'Эта почта уже зарегистрирована', 409)
+            return fail('Логин или почта уже используются', 409)
         session.clear()
         session.update(uid=uid, csrf=secrets.token_hex(24))
         return current()
@@ -207,7 +209,7 @@ def create_app(test_config=None):
             if count >= app.config['PASSWORD_RESET_LIMIT']:
                 return jsonify(message='Если адрес зарегистрирован, инструкция будет отправлена на почту'), 200
             c.execute('INSERT INTO password_reset_requests(ip_address,email_hash,created_at) VALUES(?,?,?)', (ip, email_hash, current_time.isoformat()))
-            user = c.execute('SELECT id,email,name FROM users WHERE email=?', (email,)).fetchone()
+            user = c.execute('SELECT id,email,name FROM users WHERE email=? COLLATE NOCASE', (email,)).fetchone()
             if user:
                 raw_token = secrets.token_urlsafe(32)
                 token_hash = hashlib.sha256(raw_token.encode('utf-8')).hexdigest()
