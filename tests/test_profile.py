@@ -49,7 +49,7 @@ def test_details_and_password_are_shared_across_modes(app):
     for mode in ('client', 'master'):
         assert master.get('/api/dashboard?mode=' + mode).json['user']['name'] == details['name']
     assert post(master, '/logout', {}).status_code == 200
-    credentials = {'email': 'master@svobodno.demo'}
+    credentials = {'username': 'master'}
     assert post(master, '/login', {**credentials, 'password': details['current_password']}).status_code == 401
     assert post(master, '/login', {**credentials, 'password': details['new_password']}).status_code == 200
     with sqlite3.connect(app.config['DATABASE']) as connection:
@@ -136,7 +136,7 @@ def test_delete_dual_role_account_preserves_shared_history_after_restart(app, tm
 
     restarted = create_app(dict(app.config))
     public = restarted.test_client()
-    assert post(public, '/login', {'email': 'master@svobodno.demo', 'password': 'Demo2026!'}).status_code == 401
+    assert post(public, '/login', {'username': 'master', 'password': 'Demo2026!'}).status_code == 401
     assert 1 not in [s['id'] for s in public.get('/api/catalog').json['specialists']]
     assert public.get('/api/services/1').status_code == 404
     with sqlite3.connect(app.config['DATABASE']) as connection:
@@ -152,8 +152,8 @@ def test_client_deletion_blocks_booking_and_releases_email_without_reviving_old_
     assert mutate(customer, 'DELETE', '/account').status_code == 200
     restarted = create_app(dict(app.config))
     public = restarted.test_client()
-    assert post(public, '/login', {'email': 'client@svobodno.demo', 'password': 'Demo2026!'}).status_code == 401
-    assert post(public, '/register', {'email': 'client@svobodno.demo', 'name': 'Новый клиент',
+    assert post(public, '/login', {'username': 'client', 'password': 'Demo2026!'}).status_code == 401
+    assert post(public, '/register', {'username': 'client2', 'email': 'client@svobodno.demo', 'name': 'Новый клиент',
                                       'password': 'NewPassword123'}).status_code == 200
     assert stale_session.get('/api/session').json['user'] is None
 
