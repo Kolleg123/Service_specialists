@@ -76,7 +76,7 @@ def deliver_pending(connection, current_time, limit=50):
                    SET status='delivered',delivered_at=?,last_error=NULL WHERE id=?""",
                 (current_time, row['id']))
             sent += 1
-        except DeliveryError as error:
+        except Exception as error:
             attempts = row['attempts'] + 1
             status = 'failed' if attempts >= MAX_ATTEMPTS else 'retry'
             delay = min(60 * (2 ** max(attempts - 1, 0)), 3600)
