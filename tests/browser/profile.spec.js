@@ -78,6 +78,7 @@ test('specialist updates their public name and photo, and admin removes only the
   await page.locator('#dashboard-mode').selectOption('client');
   await page.getByRole('button', {name:'Профиль', exact:true}).click();
   await page.getByRole('button', {name:'Изменить данные'}).click();
+  await page.getByRole('button', {name:'Изменить данные'}).click();
   await page.getByLabel('ФИО').fill('ФИО после обновления');
   await page.getByRole('button', {name:'Сохранить изменения'}).click();
   await expect(page.locator('#toast')).toContainText('Профиль сохранён');
