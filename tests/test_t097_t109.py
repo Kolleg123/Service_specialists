@@ -79,6 +79,7 @@ def test_notification_retry_and_idempotency(app, monkeypatch):
         raise delivery.DeliveryError('test delivery failure')
     monkeypatch.setattr(delivery, 'adapter', lambda: type('A', (), {'send': fail})())
     with sqlite3.connect(app.config['DATABASE']) as con:
+        con.execute("DELETE FROM outgoing_notifications WHERE booking_id<>? OR event<>'confirmed'", (booking.json['id'],))
         result = delivery.deliver_pending(con, now())
         row = con.execute("SELECT status,attempts,last_error FROM outgoing_notifications WHERE booking_id=? AND event='confirmed' ORDER BY id DESC LIMIT 1", (booking.json['id'],)).fetchone()
     assert result['failed'] == 1
