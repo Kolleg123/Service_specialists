@@ -30,7 +30,7 @@ def app(tmp_path, monkeypatch):
 
 def register(app):
     browser = app.test_client()
-    response = post(browser, '/register', {'name': 'Мария', 'email': 'new@example.test',
+    response = post(browser, '/register', {'name': 'Мария', 'username': 'maria', 'email': 'new@example.test',
                                          'password': 'LocalTest2026!', 'role': 'master'})
     assert response.status_code == 200
     assert response.json['user']['role'] == 'client'
