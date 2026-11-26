@@ -44,7 +44,7 @@ def create_app(test_config=None):
                       SMTP_USERNAME=os.environ.get('SMTP_USERNAME', ''), SMTP_PASSWORD=os.environ.get('SMTP_PASSWORD', ''),
                       SMTP_FROM_EMAIL=os.environ.get('SMTP_FROM_EMAIL', ''), SMTP_FROM_NAME=os.environ.get('SMTP_FROM_NAME', 'Свободно.'),
                       APP_BASE_URL=os.environ.get('APP_BASE_URL', 'http://127.0.0.1:5000'),
-                      PASSWORD_RESET_TTL_MINUTES=30, PASSWORD_RESET_LIMIT=3, PASSWORD_RESET_WINDOW_MINUTES=60)
+                      PASSWORD_RESET_TTL_MINUTES=30, PASSWORD_RESET_LIMIT=30, PASSWORD_RESET_WINDOW_MINUTES=60)
     if test_config:
         app.config.update(test_config)
     uploads = Path(app.config['UPLOAD_FOLDER'])
