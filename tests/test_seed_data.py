@@ -60,7 +60,7 @@ def test_legacy_partial_database_with_one_specialist_is_repaired(tmp_path):
     assert len(first['users']) == 6
     assert len(first['services']) == 11
     assert len(first['slots']) == 160
-    assert any(r[2] == 'own@example.test' and r[3] == 'my-hash' for r in first['users'])
+    assert any(r[3] == 'own@example.test' and r[4] == 'my-hash' for r in first['users'])
     initialize(path)
     assert snapshot(path) == first
 
@@ -177,3 +177,25 @@ def test_legacy_history_only_keeps_original_anchor_and_history(tmp_path):
         assert c.execute("SELECT value FROM seed_meta WHERE name='anchor_date'").fetchone()[0] == '2030-05-10T00:00:00'
     initialize(path, datetime(2032, 1, 1))
     assert snapshot(path) == recovered
+
+
+
+def test_legacy_users_table_gets_stable_username_without_losing_account_data(tmp_path):
+    path = tmp_path / 'legacy-no-username.sqlite'
+    legacy_schema = SCHEMA.replace('name TEXT,username TEXT,email TEXT', 'name TEXT,email TEXT')
+    with connect(path) as connection:
+        connection.executescript(legacy_schema)
+        connection.execute(
+            "INSERT INTO users(id,name,email,password,role) VALUES(700,'Старый пользователь','old.login@example.test','old-hash','client')"
+        )
+    for _ in range(2):
+        with connect(path) as connection:
+            initialize_database(connection, datetime(2030, 5, 10), demo_mode=False)
+    with connect(path) as connection:
+        user = connection.execute(
+            'SELECT name,username,email,password FROM users WHERE id=700'
+        ).fetchone()
+        assert tuple(user) == ('Старый пользователь', 'old.login', 'old.login@example.test', 'old-hash')
+        assert connection.execute(
+            "SELECT COUNT(*) FROM users WHERE username='old.login'"
+        ).fetchone()[0] == 1

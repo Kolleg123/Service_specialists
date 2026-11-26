@@ -12,7 +12,7 @@ async function post(page, path, data) {
 
 async function register(page, email) {
  await page.goto('/');
- const registration = await post(page, '/register', {name:'Тестовый пользователь', email, password:'BrowserTest123'});
+ const registration = await post(page, '/register', {name:'Тестовый пользователь', username:email.split('@')[0].replace(/[^a-z0-9]/gi,'').slice(0,20), email, password:'BrowserTest123'});
  expect(registration.status()).toBe(200);
  await page.goto('/#dashboard');
  await page.reload();
@@ -77,7 +77,9 @@ test('specialist updates their public name and photo, and admin removes only the
   await page.reload();
   await page.locator('#dashboard-mode').selectOption('client');
   await page.getByRole('button', {name:'Профиль', exact:true}).click();
+  await page.getByRole('button', {name:'Изменить данные'}).click();
   await page.getByLabel('ФИО').fill('ФИО после обновления');
+  await page.getByLabel('Электронная почта').fill('profile-updated@example.test');
   await page.getByRole('button', {name:'Сохранить изменения'}).click();
   await expect(page.locator('#toast')).toContainText('Профиль сохранён');
   const avatar = page.locator('#avatar-file');
@@ -93,7 +95,10 @@ test('specialist updates their public name and photo, and admin removes only the
   await expect(accountAvatar).toHaveAttribute('src', photo);
   await page.locator('#dashboard-mode').selectOption('master');
   await page.getByRole('button', {name:'Профиль', exact:true}).click();
-  await expect(page.getByLabel('ФИО')).toHaveValue('ФИО после обновления');
+  await expect(page.locator('#profile-view')).toContainText('ФИО после обновления');
+  await expect(page.locator('#profile-view')).toContainText('profile-updated@example.test');
+  await expect(page.locator('#profile-view')).toContainText('Неизменяемый логин');
+  await expect(page.locator('#profile-form')).toBeHidden();
 
   await page.goto('/#catalog');
   const publicCard = page.getByRole('button', {name:'Профиль: ФИО после обновления'});

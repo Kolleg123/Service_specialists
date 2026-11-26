@@ -19,8 +19,9 @@ async function loginCustomer(page, register = false) {
   if (register) {
     await page.getByRole('button', { name: 'Нет аккаунта? Зарегистрироваться' }).click();
     await page.getByLabel('Ваше имя').fill('Клиент расписания');
+    await page.getByLabel('Логин', { exact: true }).fill('weekly-client');
   }
-  await page.getByLabel('Электронная почта').fill(testEmail);
+  await page.getByLabel(register ? 'Электронная почта' : 'Логин или почта').fill(testEmail);
   await page.getByLabel('Пароль', { exact: true }).fill(testPassword);
   await page.locator('#login-form').getByRole('button').click();
   await expect(page.locator('.dashboard')).toBeVisible();

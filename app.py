@@ -36,7 +36,7 @@ from backend.moderation.services import (ModerationError, PUBLIC_SERVICE, decide
                                 service_details, service_fields)
 from backend.moderation.specialists import decide_application, latest_application, submit_application
 
-load_dotenv()
+load_dotenv(Path(__file__).resolve().with_name('.env'))
 
 TZ = ZoneInfo('Europe/Kirov')
 
@@ -53,7 +53,7 @@ def create_app(test_config=None):
                       SMTP_USERNAME=os.environ.get('SMTP_USERNAME', ''), SMTP_PASSWORD=os.environ.get('SMTP_PASSWORD', ''),
                       SMTP_FROM_EMAIL=os.environ.get('SMTP_FROM_EMAIL', ''), SMTP_FROM_NAME=os.environ.get('SMTP_FROM_NAME', 'Свободно.'),
                       APP_BASE_URL=os.environ.get('APP_BASE_URL', 'http://127.0.0.1:5000'),
-                      PASSWORD_RESET_TTL_MINUTES=30, PASSWORD_RESET_LIMIT=3, PASSWORD_RESET_WINDOW_MINUTES=60,
+                      PASSWORD_RESET_TTL_MINUTES=30, PASSWORD_RESET_LIMIT=30, PASSWORD_RESET_WINDOW_MINUTES=60,
                       PASSWORD_RESET_IP_LIMIT=30, PASSWORD_RESET_GLOBAL_LIMIT=150)
     Payments.configure(app)
     configure(app, test_config)
@@ -71,6 +71,10 @@ def create_app(test_config=None):
                 yield con
         finally:
             con.close()
+
+    def valid_sqlite_id(value):
+        """Accept only positive SQLite INTEGER identifiers (never bool or coercible strings)."""
+        return type(value) is int and 1 <= value < 2**63
 
     payments = Payments(app, db, now)
     delivery = RecoveryDelivery(app, db)
@@ -117,6 +121,15 @@ def create_app(test_config=None):
     def csrf():
         if request.endpoint == 'webhook':
             return None
+        for value in (request.view_args or {}).values():
+            if type(value) is int and not valid_sqlite_id(value):
+                return fail('Некорректный идентификатор', 400)
+        for field in ('id', 'ident', 'specialist_id', 'service_id', 'slot_id', 'booking_id',
+                      'notification_id', 'application_id', 'review_id'):
+            if field in request.args:
+                raw = request.args.get(field, '')
+                if not re.fullmatch(r'[0-9]{1,19}', raw) or not valid_sqlite_id(int(raw)):
+                    return fail('Некорректный идентификатор', 400)
         if request.method in ('POST', 'PATCH', 'DELETE'):
             if not session.get('csrf') or request.headers.get('X-CSRF-Token') != session['csrf']:
                 return fail('Обновите страницу и повторите действие', 403)
@@ -130,6 +143,15 @@ def create_app(test_config=None):
                 return fail('Ожидается JSON', 415)
             if not isinstance(request.get_json(), dict):
                 return fail('Ожидается JSON-объект')
+            data = request.get_json()
+            for field in ('slot_id', 'service_id', 'booking_id', 'specialist_id', 'user_id',
+                          'review_id', 'application_id', 'notification_id'):
+                value = data.get(field)
+                if value is not None and not valid_sqlite_id(value):
+                    return fail('Некорректный идентификатор', 400)
+            if 'ids' in data and (not isinstance(data['ids'], list) or
+                                  any(not valid_sqlite_id(value) for value in data['ids'])):
+                return fail('Список содержит некорректный идентификатор', 400)
 
     @app.after_request
     def password_recovery_headers(response):
@@ -162,7 +184,7 @@ def create_app(test_config=None):
         session.setdefault('csrf', secrets.token_hex(24))
         with db() as c:
             user = session_user(c)
-        fields = ('id', 'name', 'email', 'role', 'specialist_id', 'avatar')
+        fields = ('id', 'name', 'username', 'email', 'role', 'specialist_id', 'avatar')
         response = jsonify(user={field: user[field] for field in fields} if user else None,
                            csrf=session['csrf'], demo_mode=demo_mode)
         response.headers['Cache-Control'] = 'no-store'
@@ -171,28 +193,47 @@ def create_app(test_config=None):
     @app.post('/api/login')
     def login():
         data = request.get_json()
+        raw_identifier = str(data.get('identifier') or data.get('username') or data.get('email') or '').strip()
+        identifier = raw_identifier.lower()
         with db() as c:
-            user = c.execute('SELECT * FROM users WHERE email=?', (str(data.get('email', '')).strip().lower(),)).fetchone()
+            if '@' in identifier:
+                # A legacy database may contain addresses differing only by case.
+                user = c.execute('SELECT * FROM users WHERE email=?', (raw_identifier,)).fetchone()
+                if not user:
+                    matches = c.execute('SELECT * FROM users WHERE email=? COLLATE NOCASE LIMIT 2', (identifier,)).fetchall()
+                    user = matches[0] if len(matches) == 1 else None
+            else:
+                user = c.execute('SELECT * FROM users WHERE username=? COLLATE NOCASE', (identifier,)).fetchone()
             permitted = allowed_account(c, user, demo_mode)
         if not permitted or not check_password_hash(user['password'], str(data.get('password', ''))):
-            return fail('Неверная почта или пароль', 401)
+            return fail('Неверный логин или пароль', 401)
         sign_in(user['id'], user['session_version'])
         return current()
 
     @app.post('/api/register')
     def register():
         d = request.get_json()
-        name, email, password = (str(d.get(k, '')).strip() for k in ('name', 'email', 'password'))
+        name = str(d.get('name', '')).strip()
+        username = str(d.get('username', '')).strip().lower()
+        email = str(d.get('email', '')).strip().lower()
+        password = str(d.get('password', ''))
         if demo_email(email):
             return fail('Этот почтовый домен зарезервирован для демонстрации')
-        if not 2 <= len(name) <= 80 or '@' not in email or len(email) > 120 or not 8 <= len(password) <= 128:
-            return fail('Укажите имя, корректную почту и пароль от 8 до 128 символов')
+        if not 2 <= len(name) <= 80 or not re.fullmatch(r'[a-z0-9_.-]{3,30}', username):
+            return fail('Укажите имя и логин длиной 3–30 символов (латинские буквы, цифры, точка, дефис или подчёркивание)')
+        if not re.fullmatch(r'[^\s@]+@[^\s@]+\.[^\s@]+', email) or len(email) > 120 or not 8 <= len(password) <= 128:
+            return fail('Укажите корректную почту и пароль от 8 до 128 символов')
         try:
             with db() as c:
-                uid = c.execute('INSERT INTO users(name,email,password,role) VALUES(?,?,?,?)',
-                                (name, email.lower(), generate_password_hash(password), 'client')).lastrowid
+                c.execute('BEGIN IMMEDIATE')
+                if c.execute('SELECT 1 FROM users WHERE username=? COLLATE NOCASE', (username,)).fetchone():
+                    return fail('Этот логин уже занят', 409)
+                if c.execute('SELECT 1 FROM users WHERE email=? COLLATE NOCASE', (email,)).fetchone():
+                    return fail('Эта почта уже зарегистрирована', 409)
+                uid = c.execute('INSERT INTO users(name,username,email,password,role) VALUES(?,?,?,?,?)',
+                                (name, username, email, generate_password_hash(password), 'client')).lastrowid
         except sqlite3.IntegrityError:
-            return fail('Эта почта уже зарегистрирована', 409)
+            return fail('Логин или почта уже используются', 409)
         sign_in(uid, 0)
         return current()
 
@@ -227,7 +268,8 @@ def create_app(test_config=None):
             c.execute('INSERT INTO password_reset_requests(ip_address,email_hash,created_at) VALUES(?,?,?)',
                       (ip, email_hash, current_time.isoformat()))
             c.execute('DELETE FROM password_reset_tokens WHERE expires_at<=?', (current_time.isoformat(),))
-            user = c.execute('SELECT * FROM users WHERE email=?', (email,)).fetchone()
+            matches = c.execute('SELECT * FROM users WHERE email=? COLLATE NOCASE LIMIT 2', (email,)).fetchall()
+            user = matches[0] if len(matches) == 1 else None
             if not allowed_account(c, user, demo_mode):
                 return response
             raw_token = secrets.token_urlsafe(32)
@@ -293,8 +335,10 @@ def create_app(test_config=None):
     @app.patch('/api/profile')
     @auth(*CUSTOMER_ROLES)
     def update_profile(user):
+        data = request.get_json()
+        if isinstance(data.get('email'), str) and demo_email(data['email']) and not demo_mode:
+            return fail('Этот почтовый домен зарезервирован для демонстрации')
         with db() as c:
-            data = request.get_json()
             update_details(c, user['id'], data)
             if data.get('new_password'):
                 version = account(c, user['id'])['session_version']
@@ -623,7 +667,7 @@ def create_app(test_config=None):
             rows.append(row)
         return jsonify(bookings=rows, pending=pending, searches=[dict(r) for r in searches], reviews=[dict(r) for r in reviews],
                        specialist_application=application, specialist_categories=profile_groups,
-                       user={key: user[key] for key in ('id', 'name', 'email', 'role', 'specialist_id', 'avatar')},
+                       user={key: user[key] for key in ('id', 'name', 'username', 'email', 'role', 'specialist_id', 'avatar')},
                        server_now=current_time.isoformat(timespec='seconds'))
 
     def apply_booking_transition(user, ident, action):

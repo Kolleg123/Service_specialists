@@ -8,6 +8,7 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 import click
+from backend.auth.identity import available_username
 from werkzeug.middleware.proxy_fix import ProxyFix
 from werkzeug.security import generate_password_hash
 
@@ -57,7 +58,7 @@ def configure(app, overrides):
                 temporary.unlink(missing_ok=True)
         secret = path.read_text().strip()
     if not app.testing and (len(secret) < 32 or secret == 'replace-with-a-long-random-secret'):
-        raise ValueError('APP_SECRET должен содержать случайный секрет длиной не менее 32 символов')
+        raise ValueError('APP_SECRET должен содержать случайный секрет длиной не менее 32 символов. Проверьте окружение службы и .env проекта.')
     namespace = b'svobodno-demo-v1' if demo else b'svobodno-main-v1'
     namespace += b'\0' + os.fsencode(app.config['DATABASE'])
     app.secret_key = hmac.new(secret.encode(), namespace, hashlib.sha256).hexdigest()
@@ -108,6 +109,7 @@ def register_admin_command(app, db):
             connection.execute('BEGIN IMMEDIATE')
             if connection.execute('SELECT 1 FROM users WHERE lower(email)=?', (email,)).fetchone():
                 raise click.ClickException('Эта почта уже используется')
-            connection.execute("INSERT INTO users(name,email,password,role) VALUES(?,?,?,'admin')",
-                               ('Администратор', email, generate_password_hash(password)))
-        click.echo('Администратор создан')
+            username = available_username(connection, email, "admin")
+            connection.execute("INSERT INTO users(name,username,email,password,role) VALUES(?,?,?,?,'admin')",
+                               ('Администратор', username, email, generate_password_hash(password)))
+        click.echo(f'Администратор создан. Логин: {username}')
