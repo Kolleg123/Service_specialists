@@ -1,9 +1,13 @@
 """Public visibility and moderation of new services and edits."""
 import json
+import re
 
 
 PUBLIC_SERVICE = "p.active=1 AND v.active=1 AND v.deleted=0 AND v.moderation_status='approved'"
 FIELDS = ('title', 'price', 'duration', 'mode', 'category_id')
+CONTACT_FIELDS = ('service_address', 'contact_phone', 'contact_instructions')
+PUBLIC_DETAILS = """v.service_address,
+    (v.contact_phone IS NOT NULL OR v.contact_instructions IS NOT NULL) AS has_contact"""
 
 
 class ModerationError(Exception):
@@ -12,7 +16,7 @@ class ModerationError(Exception):
         self.status = status
 
 
-def service_fields(connection, data):
+def service_fields(connection, data, existing=None):
     title, price, duration, mode, category_id = (data.get(key) for key in FIELDS)
     if (not isinstance(title, str) or not 3 <= len(title.strip()) <= 100
             or type(price) is not int or not 0 <= price <= 1000000
@@ -23,12 +27,39 @@ def service_fields(connection, data):
             'SELECT 1 FROM service_categories WHERE id=? AND parent_id IS NOT NULL AND archived=0', (category_id,)
     ).fetchone():
         raise ModerationError('Выберите категорию услуги из справочника')
-    return dict(zip(FIELDS, (title.strip(), price, duration, mode, category_id)))
+    fields = dict(zip(FIELDS, (title.strip(), price, duration, mode, category_id)))
+    previous = existing or {}
+    for key, label, limit in (
+        ('service_address', 'адрес оказания услуги', 250),
+        ('contact_phone', 'контактный телефон', 32),
+        ('contact_instructions', 'инструкции для клиента', 1000),
+    ):
+        value = data.get(key, previous.get(key))
+        if value is not None and (not isinstance(value, str) or len(value.strip()) > limit):
+            raise ModerationError(f'Проверьте поле «{label}» (до {limit} символов)')
+        fields[key] = (value.strip() or None) if value is not None else None
+
+    address = fields['service_address']
+    if mode not in ('У специалиста', 'Группа'):
+        fields['service_address'] = None
+    elif (address and len(address) < 5 or
+          mode == 'У специалиста' and not address and (
+              'service_address' in data or previous.get('mode') != mode)):
+        raise ModerationError('Укажите адрес оказания услуги (от 5 до 250 символов)')
+    phone = fields['contact_phone']
+    if phone and (not re.fullmatch(r'\+?[0-9][0-9 ().-]*', phone)
+                  or not 7 <= sum(char.isdigit() for char in phone) <= 15):
+        raise ModerationError('Укажите корректный контактный телефон (от 7 до 15 цифр)')
+    return fields
 
 
 def service_details(row):
     result = dict(row)
-    result['draft'] = json.loads(row['draft']) if row['draft'] else None
+    draft = json.loads(row['draft']) if row['draft'] else None
+    if draft is not None:
+        for key in CONTACT_FIELDS:
+            draft.setdefault(key, result[key])
+    result['draft'] = draft
     return result
 
 
@@ -50,7 +81,8 @@ def manage_service(connection, specialist_id, service_id, data, action, clock):
         connection.execute('UPDATE services SET deleted=1,active=0,revision=revision+1 WHERE id=?',
                            (service_id,))
         return
-    fields = service_fields(connection, data)
+    current = service_details(service)
+    fields = service_fields(connection, data, current['draft'] or current)
     if service['moderation_status'] == 'approved':
         connection.execute("""UPDATE services SET draft=?,draft_status='pending',draft_reason=NULL,
             revision=revision+1 WHERE id=?""", (json.dumps(fields, ensure_ascii=False), service_id))
@@ -59,6 +91,7 @@ def manage_service(connection, specialist_id, service_id, data, action, clock):
             connection.execute("UPDATE slots SET active=0 WHERE service_id=? AND booking_mode='manual'",
                                (service_id,))
         connection.execute("""UPDATE services SET title=?,price=?,duration=?,mode=?,category_id=?,
+            service_address=?,contact_phone=?,contact_instructions=?,
             moderation_status='pending',moderation_reason=NULL,revision=revision+1 WHERE id=?""",
                            (*fields.values(), service_id))
 
@@ -102,8 +135,9 @@ def decide_service(connection, service_id, data, clock):
                 strftime('%Y-%m-%dT%H:%M', starts_at, '+' || ? || ' minutes'))
                 WHERE service_id=? AND booking_mode='manual'""", (service['duration'], service_id))
         connection.execute("""UPDATE services SET title=?,price=?,duration=?,mode=?,category_id=?,
+            service_address=?,contact_phone=?,contact_instructions=?,
             draft=NULL,draft_status=NULL,draft_reason=NULL WHERE id=?""",
-                           (*(fields[key] for key in FIELDS), service_id))
+                           (*(fields[key] for key in (*FIELDS, *CONTACT_FIELDS)), service_id))
     else:
         connection.execute("UPDATE services SET draft_status='rejected',draft_reason=? WHERE id=?",
                            (reason, service_id))

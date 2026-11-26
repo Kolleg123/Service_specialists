@@ -3,6 +3,16 @@ let activeBooking = null;
 
 const WEEKDAYS = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс'];
 
+function serviceVisitDetails(service) {
+  const place = service.mode === 'Выезд' ? 'Специалист приедет по адресу, который вы укажете.' :
+    service.mode === 'Онлайн' ? 'Услуга проходит дистанционно.' :
+    service.service_address ? `<strong>Адрес приёма</strong> · ${esc(service.service_address)}` :
+    'Специалист пока не указал адрес приёма.';
+  const contact = service.has_contact ? 'Контакты или инструкции появятся в личном кабинете после записи.' :
+    'Специалист пока не добавил контакты и инструкции.';
+  return `<div class="visit-details"><p>${place}</p><p class="muted">${contact}</p></div>`;
+}
+
 function scheduleForm(schedule) {
   return `<form id="weekly-schedule" class="panel form-grid">
     <label class="field">Режим записи<select name="mode" data-current="${schedule?.mode || 'manual'}">
@@ -103,12 +113,15 @@ class BookingFlow {
       <label class="field">Услуга<select id="booking-service">${s.services.map(v => `<option value="${v.id}">${esc(v.title)} · ${money(v.price)} · ${v.duration} мин</option>`).join('')}</select></label>
       <p class="muted" data-profile-service-category></p>
       <p class="timezone-note">Время Кирова · UTC+3.</p>
+      <div id="service-visit"></div>
       <div id="booking-notice" role="status" aria-live="polite"></div>
       <div id="step-content"></div>
     </section>`);
     if (this.serviceId !== null) $('#booking-service').value = String(this.serviceId);
     $('#booking-service').onchange = e => {
       this.serviceId = Number(e.target.value);
+      this.slots = [];
+      this.fields.address = '';
       this.renderCategoryLabels();
       this.resetChoice('Услуга изменена. Прежние дата и время сброшены — выберите новый слот.');
       this.step = this.ownProfile ? 1 : 2;
@@ -172,6 +185,8 @@ class BookingFlow {
       if (this.step === 2) this.refresh('Проверьте актуальное расписание и выберите время.');
       else this.render();
     });
+    const details = this.slot ?? this.slots[0] ?? this.service;
+    $('#service-visit').innerHTML = details ? serviceVisitDetails(details) : '';
     $('#booking-notice').textContent = this.notice;
     const content = $('#step-content');
     if (this.step === 1) {
@@ -324,7 +339,9 @@ class BookingFlow {
       ? {booking_mode: snapshot.booking_mode, date: snapshot.date, ends_at: snapshot.ends_at}
       : {slot_id: snapshot.id};
     const payload = {...selection, service_id: this.serviceId, starts_at: snapshot.starts_at,
-      duration: snapshot.duration, price: snapshot.price, ...this.fields};
+      duration: snapshot.duration, price: snapshot.price, mode: snapshot.mode,
+      service_address: snapshot.service_address, ...this.fields,
+      address: snapshot.mode === 'Выезд' ? this.fields.address : ''};
     const checking = this.pendingConfirmation || pendingOperations.has(operationIdentity('/bookings', payload));
     this.submitting = true;
     $('#booking-service').disabled = true;
@@ -339,7 +356,7 @@ class BookingFlow {
         const {slots} = await api(`/slots/${this.specialist.id}?service_id=${this.serviceId}`);
         if (!this.alive) return;
         const live = slots.find(s => s.booking_mode === snapshot.booking_mode && this.slotKey(s) === this.slotKey(snapshot));
-        if (!live || live.remaining < payload.quantity || ['service_id','starts_at','ends_at','duration','price'].some(
+        if (!live || live.remaining < payload.quantity || ['service_id','starts_at','ends_at','duration','price','mode','service_address'].some(
           field => live[field] !== snapshot[field])) {
           await this.recover('Выбранное время занято или условия услуги изменились.');
           return;

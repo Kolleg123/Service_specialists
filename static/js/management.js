@@ -79,11 +79,29 @@ function serviceFormFields(service = {}) {
   <label class="field">Длительность, мин<input name="duration" type="number" min="15" max="480" required value="${service.duration ?? 60}"></label>
   <label class="field">Формат<select name="mode">${['Выезд','У специалиста','Онлайн','Группа'].map(mode =>
    `<option ${mode === service.mode ? 'selected' : ''}>${mode}</option>`).join('')}</select></label>
-  ${serviceCategoryFields()}`;
+  ${serviceCategoryFields()}
+  <label class="field"><span>Адрес оказания услуги</span>
+   <input name="service_address" minlength="5" maxlength="250" value="${esc(service.service_address)}">
+   <small class="muted">Этот адрес увидят посетители каталога.</small></label>
+  <label class="field">Контактный телефон
+   <input name="contact_phone" type="tel" maxlength="32" autocomplete="tel" value="${esc(service.contact_phone)}"></label>
+  <label class="field">Инструкции для клиента
+   <textarea name="contact_instructions" maxlength="1000" placeholder="Например, как найти вход или подключиться к встрече">${esc(service.contact_instructions)}</textarea>
+   <small class="muted">Телефон и инструкции доступны участникам после записи.</small></label>`;
 }
 
 function bindServiceForm(form, path, categories, initialCategory, inModal = false) {
  bindServiceCategories(form, categories, initialCategory);
+ const mode = form.elements.mode;
+ const address = form.elements.service_address;
+ const syncAddress = () => {
+  const visible = ['У специалиста', 'Группа'].includes(mode.value);
+  address.required = mode.value === 'У специалиста';
+  address.disabled = !visible;
+  address.closest('label').classList.toggle('hidden', !visible);
+ };
+ mode.addEventListener('change', syncAddress);
+ syncAddress();
  $('[data-suggest-category]', form).onclick = () => showSupportForm('Предложение новой категории', form);
  form.onsubmit = async event => {
   event.preventDefault();
@@ -98,6 +116,7 @@ function bindServiceForm(form, path, categories, initialCategory, inModal = fals
    if (path === '/master/services') {
     await submitOperation(path, data);
     form.reset();
+    syncAddress();
     form.updateServiceDirectory(categories);
    } else {
     await api(path, data);

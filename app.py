@@ -1,5 +1,6 @@
 import hashlib
 import ipaddress
+import json
 import os
 import re
 import secrets
@@ -32,7 +33,7 @@ from backend.auth.profile import (AVATAR_NAME, IMAGE_TYPES, ProfileError, accoun
 from backend.database.category_management import admin_directory, remove_category, save_category
 from backend.database.service_categories import active_category_id, category_groups
 from backend.support import STATUSES, create_support, support_items, update_support
-from backend.moderation.services import (ModerationError, PUBLIC_SERVICE, decide_service, manage_service,
+from backend.moderation.services import (ModerationError, PUBLIC_DETAILS, PUBLIC_SERVICE, decide_service, manage_service,
                                 service_details, service_fields)
 from backend.moderation.specialists import decide_application, latest_application, submit_application
 
@@ -415,7 +416,7 @@ def create_app(test_config=None):
             services = {}
             available = set()
             for row in c.execute(f'''SELECT v.id,v.specialist_id,v.title,v.price,v.duration,v.mode,v.active,
-                    v.category_id,k.parent_id AS category_group_id
+                    v.category_id,k.parent_id AS category_group_id,{PUBLIC_DETAILS}
                 FROM services v JOIN specialists p ON p.id=v.specialist_id
                 LEFT JOIN service_categories k ON k.id=v.category_id AND k.archived=0
                 WHERE {PUBLIC_SERVICE} ORDER BY v.id'''):
@@ -457,8 +458,8 @@ def create_app(test_config=None):
         if not 1 <= ident < 2**63:
             return fail('Услуга не найдена', 404)
         with db() as c:
-            service = c.execute(f'''SELECT v.id,v.specialist_id,v.title,v.price,v.duration,v.mode,v.active,v.category_id
-                FROM services v JOIN specialists p ON p.id=v.specialist_id
+            service = c.execute(f'''SELECT v.id,v.specialist_id,v.title,v.price,v.duration,v.mode,v.active,v.category_id,
+                {PUBLIC_DETAILS} FROM services v JOIN specialists p ON p.id=v.specialist_id
                 WHERE v.id=? AND {PUBLIC_SERVICE}''', (ident,)).fetchone()
         return jsonify(service=dict(service)) if service else fail('Услуга не найдена', 404)
 
@@ -640,7 +641,7 @@ def create_app(test_config=None):
                 JOIN specialists p ON p.id=s.specialist_id JOIN users u ON u.id=b.user_id
                 LEFT JOIN booking_payments pay ON pay.rowid=(
                     SELECT rowid FROM booking_payments WHERE booking_id=b.id ORDER BY rowid DESC LIMIT 1)
-                WHERE {where} ORDER BY s.starts_at DESC''', params).fetchall()
+                WHERE {where} ORDER BY datetime(b.created_at) DESC,b.id DESC''', params).fetchall()
             searches = c.execute('SELECT * FROM searches WHERE user_id=? ORDER BY id DESC LIMIT 30', (user['id'],)).fetchall()
             reviews = c.execute('SELECT r.*,p.name specialist,u.name author FROM reviews r JOIN specialists p ON p.id=r.specialist_id JOIN users u ON u.id=r.user_id ' + ('' if user['role'] == 'admin' else 'WHERE r.user_id=? ') + 'ORDER BY r.id DESC', () if user['role'] == 'admin' else (user['id'],)).fetchall()
             profile_groups = ([dict(row) for row in c.execute('''SELECT id,name FROM service_categories
@@ -662,6 +663,12 @@ def create_app(test_config=None):
         for booking in bookings:
             row = {**dict(booking), **booking_policy(booking, user, current_time, booking['id'] in reviewed_ids)}
             row['payment'] = payments.summary(row, user, timestamp)
+            details = row.pop('service_details')
+            if role == 'admin':
+                row.pop('address')
+                row.pop('note')
+            elif details is not None:
+                row.update(json.loads(details))
             for field in payment_fields:
                 del row[field]
             rows.append(row)
@@ -829,8 +836,9 @@ def create_app(test_config=None):
                 fields = service_fields(c, request.get_json())
                 if not c.execute('SELECT 1 FROM specialists WHERE id=? AND deleted=0', (user['specialist_id'],)).fetchone():
                     return fail('Профиль специалиста не найден', 404)
-                ident = c.execute('''INSERT INTO services(specialist_id,title,price,duration,mode,category_id,moderation_status)
-                    VALUES(?,?,?,?,?,?,'pending')''', (user['specialist_id'], *fields.values())).lastrowid
+                ident = c.execute('''INSERT INTO services(specialist_id,title,price,duration,mode,category_id,
+                    service_address,contact_phone,contact_instructions,moderation_status)
+                    VALUES(?,?,?,?,?,?,?,?,?,'pending')''', (user['specialist_id'], *fields.values())).lastrowid
                 result = op.save(dict(ok=True, id=ident, moderation_status='pending'))
         except ModerationError as error:
             return fail(str(error), error.status)

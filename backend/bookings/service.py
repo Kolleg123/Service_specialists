@@ -1,10 +1,11 @@
 """Availability and booking creation under the same SQLite write lock."""
+import json
 from collections import Counter
 from datetime import date, datetime, time, timedelta
 
 from backend.bookings.notifications import notify_booking
 from backend.bookings.schedule import BOOKING_WINDOW_DAYS, schedule_for, schedule_windows
-from backend.moderation.services import PUBLIC_SERVICE
+from backend.moderation.services import CONTACT_FIELDS, PUBLIC_DETAILS, PUBLIC_SERVICE
 
 
 class BookingError(Exception):
@@ -88,12 +89,14 @@ def _scheduled_slots(connection, schedule, services, current_time, requested_day
                            service=service['title'], starts_at=start.isoformat(timespec='minutes'),
                            ends_at=end.isoformat(timespec='minutes'), date=date_key, booking_mode=mode,
                            capacity=1, active=1, remaining=remaining, mode=service['mode'],
-                           price=service['price'], duration=service['duration']))
+                           price=service['price'], duration=service['duration'],
+                           service_address=service['service_address'],
+                           has_contact=bool(service['contact_phone'] or service['contact_instructions'])))
         yield from sorted(slots, key=lambda slot: slot['starts_at'])
 
 
 def _manual_slots(connection, specialist_id, current_time, service_id):
-    rows = connection.execute(f'''SELECT s.*,v.title service,v.duration,v.price,v.mode,
+    rows = connection.execute(f'''SELECT s.*,v.title service,v.duration,v.price,v.mode,{PUBLIC_DETAILS},
         s.capacity-COALESCE((SELECT SUM(b.quantity) FROM bookings b
             WHERE b.slot_id=s.id AND b.status='confirmed'),0) remaining
         FROM slots s JOIN services v ON s.service_id=v.id
@@ -168,7 +171,10 @@ def create_booking(connection, user_id, data, clock):
         raise BookingError('Укажите корректный слот записи')
     if (mode != 'manual' or service_id is not None) and (type(service_id) is not int or not 1 <= service_id < 2**63):
         raise BookingError('Укажите корректную услугу')
-    address, note = str(data.get('address', '')).strip(), str(data.get('note', '')).strip()
+    address, note = data.get('address', ''), data.get('note', '')
+    if not isinstance(address, str) or not isinstance(note, str):
+        raise BookingError('Адрес и комментарий должны быть текстом')
+    address, note = address.strip(), note.strip()
     if len(address) > 250 or len(note) > 1000:
         raise BookingError('Слишком длинный адрес или комментарий')
 
@@ -178,7 +184,7 @@ def create_booking(connection, user_id, data, clock):
         raise BookingError('Войдите в личный кабинет', 401)
     current_time = clock()
     if mode == 'manual':
-        slot = connection.execute(f'''SELECT s.*,v.mode,v.price,v.duration FROM slots s
+        slot = connection.execute(f'''SELECT s.*,v.mode,v.price,v.duration,v.service_address FROM slots s
             JOIN services v ON v.id=s.service_id JOIN specialists p ON p.id=s.specialist_id
             WHERE s.id=? AND s.active=1 AND s.booking_mode='manual' AND {PUBLIC_SERVICE}''',
             (slot_id,)).fetchone()
@@ -202,11 +208,13 @@ def create_booking(connection, user_id, data, clock):
 
     if user['specialist_id'] == slot['specialist_id']:
         raise BookingError('Записаться на собственную услугу нельзя', 403)
-    for key in ('starts_at', 'ends_at', 'duration', 'price'):
+    for key in ('starts_at', 'ends_at', 'duration', 'price', 'mode', 'service_address'):
         if key in data and data[key] != slot[key]:
-            raise BookingError('Условия записи изменились. Проверьте дату, время и цену заново.', 409)
+            raise BookingError('Условия записи изменились. Проверьте услугу и время заново.', 409)
     if slot['mode'] == 'Выезд' and len(address) < 5:
         raise BookingError('Укажите адрес выезда специалиста')
+    if slot['mode'] != 'Выезд':
+        address = ''
     if mode == 'manual':
         used = connection.execute('''SELECT COALESCE(SUM(quantity),0) FROM bookings
             WHERE slot_id=? AND status='confirmed' ''', (slot_id,)).fetchone()[0]
@@ -219,9 +227,13 @@ def create_booking(connection, user_id, data, clock):
             raise BookingError('Вы уже записаны на это время', 409)
     else:
         slot_id = _persist_slot(connection, slot)
+    service = connection.execute('''SELECT mode,service_address,contact_phone,contact_instructions
+        FROM services WHERE id=?''', (slot['service_id'],)).fetchone()
+    details = {key: service[key] for key in ('mode', *CONTACT_FIELDS)}
     booking_id = connection.execute('''INSERT INTO bookings
-        (user_id,slot_id,quantity,address,note,status,created_at,total)
-        VALUES(?,?,?,?,?,'confirmed',?,?)''',
-        (user_id, slot_id, qty, address, note, current_time.isoformat(timespec='minutes'), slot['price'] * qty)).lastrowid
+        (user_id,slot_id,quantity,address,note,status,created_at,total,service_details)
+        VALUES(?,?,?,?,?,'confirmed',?,?,?)''',
+        (user_id, slot_id, qty, address, note, current_time.isoformat(timespec='seconds'),
+         slot['price'] * qty, json.dumps(details, ensure_ascii=False))).lastrowid
     notify_booking(connection, booking_id, 'confirmed', current_time)
     return booking_id

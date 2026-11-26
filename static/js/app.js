@@ -302,6 +302,14 @@ const paymentLabels = {
  refund_canceled:'Возврат отменён. Обратитесь к администратору', needs_review:'Требуется проверка администратором'
 };
 
+function bookedVisitDetails(booking) {
+  const address = booking.address ? `<p><strong>${booking.mode === 'Выезд' ? 'Адрес выезда' : 'Адрес записи'}</strong> · ${esc(booking.address)}</p>` :
+    booking.service_address ? `<p><strong>Адрес приёма</strong> · ${esc(booking.service_address)}</p>` : '';
+  const phone = booking.contact_phone ? `<p><strong>Телефон специалиста</strong> · <a href="tel:${booking.contact_phone.replace(/[^+0-9]/g, '')}">${esc(booking.contact_phone)}</a></p>` : '';
+  const instructions = booking.contact_instructions ? `<p class="visit-instructions"><strong>Инструкции</strong> · ${esc(booking.contact_instructions)}</p>` : '';
+  return address + phone + instructions;
+}
+
 function bookingActions(booking) {
  const buttons = [];
  if (booking.payment) {
@@ -512,7 +520,7 @@ async function renderDashboard(background) {
   $('#refresh-bookings').onclick=async()=>{try{await dashboard();$('#dashboard-update-status').textContent='Статусы обновлены';$('#refresh-bookings').focus();}catch(error){toast(error.message);}};
   const draw=()=>{
    const rows=data.bookings.filter(b=>$('#booking-status').value==='all'||b.status===$('#booking-status').value);
-   $('#booking-list').innerHTML=rows.length?rows.map(b=>`<article class="booking-row" data-booking-id="${b.id}"><img src="${esc(b.photo)}" alt=""><div class="booking-info"><span class="badge ${b.status} ${b.phase}">${esc(b.status_label)}</span><h3>${esc(b.service)}</h3><p>${esc(b.specialist)}${!isClient?' · Клиент: '+esc(b.client):''}</p><p><b>${date(b.starts_at)}${b.booking_mode==='day'?'':` · ${time(b.starts_at)}–${b.starts_at.slice(0,10)===b.ends_at.slice(0,10)?'':date(b.ends_at)+' · '}${time(b.ends_at)}`}</b> · ${b.duration} мин · ${b.mode} · ${b.quantity} мест(о)</p>${b.address?`<p>⌖ ${esc(b.address)}</p>`:''}${b.note?`<p class="muted">${esc(b.note)}</p>`:''}${b.cancel_reason ? `<p>Причина отмены: ${esc(b.cancel_reason)}</p>` : ''}</div><div class="booking-actions">${bookingActions(b)}</div></article>`).join(''):'<div class="empty"><span>▦</span><h3>Здесь пока нет записей</h3><p>Выберите специалиста и удобное время в каталоге.</p><a class="button" href="#catalog">Найти специалиста ↗</a></div>';
+   $('#booking-list').innerHTML=rows.length?rows.map(b=>`<article class="booking-row" data-booking-id="${b.id}"><img src="${esc(b.photo)}" alt=""><div class="booking-info"><span class="badge ${b.status} ${b.phase}">${esc(b.status_label)}</span><h3>${esc(b.service)}</h3><p>${esc(b.specialist)}${!isClient?' · Клиент: '+esc(b.client):''}</p><p><b>${date(b.starts_at)}${b.booking_mode==='day'?'':` · ${time(b.starts_at)}–${b.starts_at.slice(0,10)===b.ends_at.slice(0,10)?'':date(b.ends_at)+' · '}${time(b.ends_at)}`}</b> · ${b.duration} мин · ${esc(b.mode)} · ${b.quantity} мест(о)</p>${bookedVisitDetails(b)}${b.note?`<p class="muted">${esc(b.note)}</p>`:''}${b.cancel_reason ? `<p>Причина отмены: ${esc(b.cancel_reason)}</p>` : ''}</div><div class="booking-actions">${bookingActions(b)}</div></article>`).join(''):'<div class="empty"><span>▦</span><h3>Здесь пока нет записей</h3><p>Выберите специалиста и удобное время в каталоге.</p><a class="button" href="#catalog">Найти специалиста ↗</a></div>';
    $$('[data-pay]', $('#booking-list')).forEach(button => button.onclick = async () => {
     if (button.disabled) return;
     button.disabled = true;
@@ -612,6 +620,7 @@ async function renderDashboard(background) {
      · ${esc(service.specialist)} · ${serviceStatus[service.application_status]}</summary>
     <p>${service.category_name ? `${esc(service.category_direction)} / ${esc(service.category_name)}` : 'Категория не указана'}</p>
     <p>${esc(service.mode)} · ${service.duration} мин · ${money(service.price)}</p>
+    ${bookedVisitDetails(service)}
     ${service.application_status === 'rejected' ? `<p>Причина: ${esc(service.draft_reason ?? service.moderation_reason)}</p>` : ''}
     ${service.application_status === 'pending' ? `<form data-service-decision="${service.id}" data-revision="${service.revision}">
      <label class="field">Причина отклонения<textarea name="reason" maxlength="500"></textarea></label>

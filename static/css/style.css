@@ -214,3 +214,8 @@ button.directory-delete:not(.outline):not(.text-button) {background:#963d42; col
 @media(max-width:800px){.profile-settings-grid{grid-template-columns:1fr;gap:25px}}
 
 .profile-view{display:grid;gap:14px;margin:18px 0}.profile-view p{display:grid;gap:5px;margin:0;padding-bottom:12px;border-bottom:1px solid var(--line,#e8e8e8)}.profile-view p span,.profile-email-note{font-size:13px;color:var(--muted)}.profile-view p strong{font-size:16px;font-weight:600}.profile-form-actions{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:14px}.profile-form-actions .button{min-height:42px}.profile-email-note{margin:10px 0 16px}.profile-settings form[hidden],.profile-view[hidden]{display:none}
+
+.visit-details { border-left: 2px solid var(--line); padding-left: 12px; margin: 12px 0; overflow-wrap: anywhere; }
+.visit-details .muted { margin: 4px 0; }
+.visit-instructions { white-space: pre-wrap; overflow-wrap: anywhere; }
+.booking-info a[href^="tel:"] { text-decoration: underline; }

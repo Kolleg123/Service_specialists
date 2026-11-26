@@ -166,6 +166,15 @@ def migrate_service_moderation(connection):
         connection.execute('ALTER TABLE bookings ADD COLUMN cancel_reason TEXT')
 
 
+def migrate_booking_details(connection):
+    columns = {row['name'] for row in connection.execute('PRAGMA table_info(services)')}
+    for name in ('service_address', 'contact_phone', 'contact_instructions'):
+        if name not in columns:
+            connection.execute(f'ALTER TABLE services ADD COLUMN {name} TEXT')
+    if 'service_details' not in {row['name'] for row in connection.execute('PRAGMA table_info(bookings)')}:
+        connection.execute('ALTER TABLE bookings ADD COLUMN service_details TEXT')
+
+
 def migrate_notifications(connection):
     columns = {row['name'] for row in connection.execute('PRAGMA table_info(notifications)')}
     schema = connection.execute("SELECT sql FROM sqlite_master WHERE name='notifications'").fetchone()
@@ -313,6 +322,7 @@ def initialize_database(connection, current_time, demo_mode):
     if 'ends_at' not in slot_columns:
         connection.execute('ALTER TABLE slots ADD COLUMN ends_at TEXT')
     migrate_service_moderation(connection)
+    migrate_booking_details(connection)
     initialize_support(connection)
     connection.execute(PAYMENT_SCHEMA)
     connection.execute('CREATE INDEX IF NOT EXISTS payment_by_booking ON booking_payments(booking_id)')
@@ -356,6 +366,9 @@ def seed_demo(connection, current_time):
         values = dict(specialist_id=specialist_ids[specialist], title=title, price=price, duration=duration,
                       mode=mode, category_id=active_category_id(
                           connection, infer_category(title, PEOPLE[specialist - 1][1])))
+        if mode in ('У специалиста', 'Группа'):
+            values['service_address'] = PEOPLE[specialist - 1][8]
+        values['contact_instructions'] = 'Демонстрационная услуга. Запись используется для знакомства с сервисом.'
         service_ids[index] = ensure(connection, f'service:{index}', 'services',
                                     {'specialist_id': values['specialist_id'], 'title': title}, values, index)
 
