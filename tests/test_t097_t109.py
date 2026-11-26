@@ -80,10 +80,27 @@ def test_notification_retry_and_idempotency(app, monkeypatch):
     monkeypatch.setattr(delivery, 'adapter', lambda: type('A', (), {'send': fail})())
     with sqlite3.connect(app.config['DATABASE']) as con:
         con.execute("DELETE FROM outgoing_notifications WHERE booking_id<>? OR event<>'confirmed'", (booking.json['id'],))
+        before = con.execute(
+            "SELECT COUNT(*) FROM outgoing_notifications WHERE booking_id=? AND event='confirmed'",
+            (booking.json['id'],)).fetchone()[0]
+        delivery.enqueue(con, f"booking:{booking.json['id']}:confirmed:duplicate",
+                         1, 'confirmed', 'duplicate protection test', now(),
+                         booking_id=booking.json['id'])
+        delivery.enqueue(con, f"booking:{booking.json['id']}:confirmed:duplicate",
+                         1, 'confirmed', 'duplicate protection test', now(),
+                         booking_id=booking.json['id'])
+        duplicate_count = con.execute(
+            "SELECT COUNT(*) FROM outgoing_notifications WHERE booking_id=? AND event='confirmed'",
+            (booking.json['id'],)).fetchone()[0]
         result = delivery.deliver_pending(con, now())
-        row = con.execute("SELECT status,attempts,last_error FROM outgoing_notifications WHERE booking_id=? AND event='confirmed' ORDER BY id DESC LIMIT 1", (booking.json['id'],)).fetchone()
-    assert result['failed'] == 1
-    assert row[0] == 'retry' and row[1] == 1 and row[2]
+        rows = con.execute(
+            "SELECT status,attempts,last_error FROM outgoing_notifications WHERE booking_id=? AND event='confirmed' ORDER BY id",
+            (booking.json['id'],)).fetchall()
+    # Booking confirmation intentionally creates one event for the customer and one for the specialist.
+    assert before == 2 and duplicate_count == before + 1
+    assert result['failed'] == 3 and calls['n'] == 3
+    assert len(rows) == 3
+    assert all(row[0] == 'retry' and row[1] == 1 and row[2] for row in rows)
 
 def test_admin_audit_contains_state_transition_and_no_secret(app):
     c = client(app)
