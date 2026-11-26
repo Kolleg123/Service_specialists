@@ -45,7 +45,7 @@ def test_confirmation_recipients_privacy_and_read_persistence(app):
         assert inbox(stranger) == []
         assert post(stranger, url, {}).status_code == 404
     assert post(master, url, {}).status_code == 404
-    assert post(customer, '/notifications/9223372036854775808/read', {}).status_code == 404
+    assert post(customer, '/notifications/9223372036854775808/read', {}).status_code == 400
     assert customer.post('/api' + url, json={}).status_code == 403
     assert post(customer, url, {}).status_code == 200
     assert post(customer, url, {}).status_code == 200

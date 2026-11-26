@@ -28,7 +28,7 @@ test('client and assigned master agree on the full timed booking lifecycle', asy
   const errors=[];
   page.on('pageerror',e=>errors.push(e.message));master.on('pageerror',e=>errors.push(e.message));
   try {
-    const register = await post(customer,'/api/register',{name:'Проверка времени',email:'lifecycle@example.test',password:'Lifecycle2026!'});
+    const register = await post(customer,'/api/register',{name:'Проверка времени',username:'lifecycle',email:'lifecycle@example.test',password:'Lifecycle2026!'});
     expect(register.status()).toBe(200);
     await page.goto('/');
     await page.locator('.specialist-card').first().getByRole('button',{name:'Выбрать время'}).click();
@@ -42,7 +42,7 @@ test('client and assigned master agree on the full timed booking lifecycle', asy
     const data = await (await customer.request.get('/api/dashboard')).json();
     const booking = data.bookings[0];
     const row = page.locator(`[data-booking-id="${booking.id}"]`);
-    expect((await post(specialist,'/api/login',{email:'master@svobodno.demo',password:'Demo2026!'})).status()).toBe(200);
+    expect((await post(specialist,'/api/login',{username:'master',password:'Demo2026!'})).status()).toBe(200);
     await master.goto('/#dashboard');
     const masterRow = master.locator(`[data-booking-id="${booking.id}"]`);
     await master.locator('#booking-status').selectOption('confirmed');

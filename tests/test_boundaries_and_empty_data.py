@@ -151,3 +151,24 @@ def test_partial_database_with_no_services_or_slots_is_safe(tmp_path):
     assert dashboard.json['services'] == []
     assert dashboard.json['slots'] == []
     assert dashboard.json['categories'] != []
+
+
+
+@pytest.mark.parametrize('value', [True, False, '1', '-1', 0, -1, 2**63, 1.0])
+def test_api_rejects_invalid_sqlite_ids_before_booking_mutation(schedule, value):
+    app, _, master = schedule
+    with sqlite3.connect(app.config['DATABASE']) as connection:
+        before = connection.execute('SELECT COUNT(*) FROM bookings').fetchone()[0]
+    response = post(master, '/bookings', {'slot_id': value, 'service_id': 1})
+    assert response.status_code == 400
+    assert 'идентификатор' in response.json['error'].lower()
+    with sqlite3.connect(app.config['DATABASE']) as connection:
+        after = connection.execute('SELECT COUNT(*) FROM bookings').fetchone()[0]
+    assert after == before
+
+
+@pytest.mark.parametrize('value', ['0', '-1', '9223372036854775808', 'abc'])
+def test_api_rejects_invalid_sqlite_id_query_parameters(schedule, value):
+    _, _, master = schedule
+    response = master.get('/api/slots/1?service_id=' + value)
+    assert response.status_code == 400

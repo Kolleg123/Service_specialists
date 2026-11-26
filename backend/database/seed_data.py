@@ -2,6 +2,7 @@
 from datetime import datetime, timedelta
 from werkzeug.security import generate_password_hash
 
+from backend.auth.identity import available_username
 from backend.support import initialize_support
 from backend.bookings.payments import PAYMENT_SCHEMA
 
@@ -10,7 +11,7 @@ from backend.database.service_categories import (active_category_id, backfill_ca
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS specialists(id INTEGER PRIMARY KEY,name TEXT,profession TEXT,category TEXT,experience INTEGER,education TEXT,skills TEXT,bio TEXT,photo TEXT,location TEXT,active INTEGER DEFAULT 1,deleted INTEGER NOT NULL DEFAULT 0);
-CREATE TABLE IF NOT EXISTS users(id INTEGER PRIMARY KEY,name TEXT,email TEXT UNIQUE,password TEXT,role TEXT,specialist_id INTEGER REFERENCES specialists(id),avatar TEXT);
+CREATE TABLE IF NOT EXISTS users(id INTEGER PRIMARY KEY,name TEXT,username TEXT,email TEXT UNIQUE,password TEXT,role TEXT,specialist_id INTEGER REFERENCES specialists(id),avatar TEXT);
 CREATE TABLE IF NOT EXISTS services(id INTEGER PRIMARY KEY,specialist_id INTEGER REFERENCES specialists(id),title TEXT,price INTEGER,duration INTEGER,mode TEXT,active INTEGER DEFAULT 1);
 CREATE TABLE IF NOT EXISTS slots(id INTEGER PRIMARY KEY,specialist_id INTEGER REFERENCES specialists(id),service_id INTEGER REFERENCES services(id),starts_at TEXT,capacity INTEGER CHECK(capacity>0),active INTEGER DEFAULT 1);
 CREATE TABLE IF NOT EXISTS specialist_schedules(
@@ -297,10 +298,15 @@ def initialize_database(connection, current_time, demo_mode):
     connection.execute("INSERT OR IGNORE INTO seed_meta(name,value) VALUES('database_mode',?)", (mode,))
     for table, field, definition in (
         ('users', 'session_version', 'INTEGER NOT NULL DEFAULT 0'),
-        ('users', 'avatar', 'TEXT'), ('specialists', 'deleted', 'INTEGER NOT NULL DEFAULT 0')
+        ('users', 'username', 'TEXT'), ('users', 'avatar', 'TEXT'), ('specialists', 'deleted', 'INTEGER NOT NULL DEFAULT 0')
     ):
         if field not in {row['name'] for row in connection.execute(f'PRAGMA table_info({table})')}:
             connection.execute(f'ALTER TABLE {table} ADD COLUMN {field} {definition}')
+    for row in connection.execute("SELECT id,email FROM users WHERE username IS NULL AND role!='deleted' ORDER BY id"):
+        username = available_username(connection, row['email'], f"user{row['id']}")
+        connection.execute('UPDATE users SET username=? WHERE id=?', (username, row['id']))
+    connection.execute('CREATE UNIQUE INDEX IF NOT EXISTS users_username_nocase ON users(username COLLATE NOCASE)')
+    connection.execute('CREATE INDEX IF NOT EXISTS users_email_nocase ON users(email COLLATE NOCASE)')
     slot_columns = {row['name'] for row in connection.execute('PRAGMA table_info(slots)')}
     if 'booking_mode' not in slot_columns:
         connection.execute("ALTER TABLE slots ADD COLUMN booking_mode TEXT NOT NULL DEFAULT 'manual'")
@@ -339,7 +345,7 @@ def seed_demo(connection, current_time):
         if specialist_ids.get(specialist) in deleted_specialists:
             continue
         user_ids[alias] = ensure(connection, f'user:{alias}', 'users', {'email': email},
-            lambda: dict(name=name, email=email, role=role, specialist_id=specialist_ids.get(specialist),
+            lambda: dict(name=name, username=available_username(connection, email, alias), email=email, role=role, specialist_id=specialist_ids.get(specialist),
                          password=generate_password_hash('Demo2026!')))
 
     deleted_users = {row['id'] for row in connection.execute("SELECT id FROM users WHERE role='deleted'")}

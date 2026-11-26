@@ -25,7 +25,7 @@ def test_modes_keep_data_and_reject_demo_login_and_cookies(tmp_path):
     ordinary = setup(tmp_path, DEMO_MODE=False)
     browser = ordinary.test_client()
     assert browser.get('/api/catalog').json['specialists'] == []
-    assert post(browser, '/register', {'name': 'Мой клиент', 'email': 'own@example.test',
+    assert post(browser, '/register', {'name': 'Мой клиент', 'username': 'own-client', 'email': 'own@example.test',
                                        'password': 'MyPassword123'}).status_code == 200
     own_session = browser.get_cookie('svobodno_session')
     demo = setup(tmp_path, DEMO_MODE=True)
