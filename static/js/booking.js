@@ -333,7 +333,7 @@ class BookingFlow {
       this.submitting = false;
     }
     if (this.alive) closeModal();
-    toast(`Запись №${booking.id} подтверждена. Подробности — в личном кабинете.`);
+    toast(`Вы записаны! Запись №${booking.id}. Подробности — в личном кабинете.`);
     state.newBookingId = booking.id;
     dashboardMode = 'client';
     dashboardTab = 'bookings';

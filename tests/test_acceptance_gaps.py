@@ -162,7 +162,7 @@ def test_failed_seed_resume_rolls_back_to_existing_snapshot(tmp_path, monkeypatc
     with sqlite3.connect(path) as connection:
         connection.row_factory = sqlite3.Row
         connection.execute("PRAGMA foreign_keys=ON")
-        initialize_database(connection, datetime(2030, 5, 10, 9, 0))
+        initialize_database(connection, datetime(2030, 5, 10, 9, 0), demo_mode=True)
         connection.execute("UPDATE specialists SET name='Моё имя' WHERE id=1")
         connection.execute(
             "INSERT INTO searches(user_id,query,created_at) VALUES(1,'Не удалять','2030-05-10')"
@@ -191,7 +191,7 @@ def test_failed_seed_resume_rolls_back_to_existing_snapshot(tmp_path, monkeypatc
         with sqlite3.connect(path) as connection:
             connection.row_factory = sqlite3.Row
             connection.execute("PRAGMA foreign_keys=ON")
-            initialize_database(connection, datetime(2031, 1, 1, 9, 0))
+            initialize_database(connection, datetime(2031, 1, 1, 9, 0), demo_mode=True)
 
     assert snapshot() == before
 
