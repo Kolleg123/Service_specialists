@@ -17,7 +17,7 @@ def test_slot_horizon_and_capacity_boundaries(tmp_path, monkeypatch):
     monkeypatch.setattr(app_module, "now", lambda: clock)
     app = create_app({
         "TESTING": True,
-        "DATABASE": str(tmp_path / "horizon.sqlite"),
+        "DEMO_MODE": True, "DEMO_DATABASE": str(tmp_path / "horizon.sqlite"),
         "SECRET_KEY": "test-only",
     })
     master = client(app, "master")
@@ -75,7 +75,7 @@ def test_individual_service_rejects_multiple_places_and_group_accepts_boundary(t
     monkeypatch.setattr(app_module, "now", lambda: clock)
     app = create_app({
         "TESTING": True,
-        "DATABASE": str(tmp_path / "capacity.sqlite"),
+        "DEMO_MODE": True, "DEMO_DATABASE": str(tmp_path / "capacity.sqlite"),
         "SECRET_KEY": "test-only",
     })
     master = client(app, "master")
@@ -92,7 +92,7 @@ def test_individual_service_rejects_multiple_places_and_group_accepts_boundary(t
 def test_dangling_specialist_relations_are_ignored_without_server_errors(tmp_path):
     app = create_app({
         "TESTING": True,
-        "DATABASE": str(tmp_path / "dangling.sqlite"),
+        "DEMO_MODE": True, "DEMO_DATABASE": str(tmp_path / "dangling.sqlite"),
         "SECRET_KEY": "test-only",
     })
     customer = client(app)
@@ -132,7 +132,7 @@ def test_seed_initialization_survives_real_app_recreation_and_preserves_edits(tm
     clock = datetime(2030, 5, 10, 9, 0)
     monkeypatch.setattr(app_module, "now", lambda: clock)
     database = str(tmp_path / "restart.sqlite")
-    config = {"TESTING": True, "DATABASE": database, "SECRET_KEY": "test-only"}
+    config = {"TESTING": True, "DEMO_MODE": True, "DEMO_DATABASE": database, "SECRET_KEY": "test-only"}
 
     first_app = create_app(config)
     with sqlite3.connect(database) as connection:
@@ -201,7 +201,7 @@ def test_admin_can_cancel_future_booking_but_terminal_actions_stay_closed(tmp_pa
     monkeypatch.setattr(app_module, "now", lambda: clock[0])
     app = create_app({
         "TESTING": True,
-        "DATABASE": str(tmp_path / "admin-cancel.sqlite"),
+        "DEMO_MODE": True, "DEMO_DATABASE": str(tmp_path / "admin-cancel.sqlite"),
         "SECRET_KEY": "test-only",
     })
     customer, admin = client(app), client(app, "admin")
@@ -222,7 +222,7 @@ def test_admin_can_cancel_future_booking_but_terminal_actions_stay_closed(tmp_pa
 def test_review_input_validation_does_not_create_partial_records(tmp_path):
     app = create_app({
         "TESTING": True,
-        "DATABASE": str(tmp_path / "review-validation.sqlite"),
+        "DEMO_MODE": True, "DEMO_DATABASE": str(tmp_path / "review-validation.sqlite"),
         "SECRET_KEY": "test-only",
     })
     customer = client(app)

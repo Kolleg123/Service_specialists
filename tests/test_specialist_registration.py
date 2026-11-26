@@ -24,7 +24,7 @@ ADMIN = '/admin/specialist-applications'
 @pytest.fixture
 def app(tmp_path, monkeypatch):
     monkeypatch.setattr(app_module, 'now', lambda: datetime(2030, 5, 6, 8))
-    return app_module.create_app({'TESTING': True, 'DATABASE': str(tmp_path / 'test.sqlite'),
+    return app_module.create_app({'TESTING': True, 'DEMO_MODE': True, 'DEMO_DATABASE': str(tmp_path / 'test.sqlite'),
                                   'SECRET_KEY': 'test-only'})
 
 

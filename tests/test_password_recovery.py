@@ -14,7 +14,7 @@ def app(tmp_path):
     sent.clear()
     return create_app({
         'TESTING': True,
-        'DATABASE': str(tmp_path / 'recovery.sqlite'),
+        'DEMO_MODE': True, 'DEMO_DATABASE': str(tmp_path / 'recovery.sqlite'),
         'SECRET_KEY': 'test-secret',
         'APP_BASE_URL': 'https://example.test',
         'MAIL_SENDER': lambda config, email, name, url: sent.append((email, name, url)),

@@ -12,7 +12,7 @@ def schedule(tmp_path, monkeypatch):
     monkeypatch.setattr(app_module, 'now', lambda: clock[0])
     app = app_module.create_app({
         'TESTING': True,
-        'DATABASE': str(tmp_path / 'schedule.sqlite'),
+        'DEMO_MODE': True, 'DEMO_DATABASE': str(tmp_path / 'schedule.sqlite'),
         'SECRET_KEY': 'test-only',
     })
     master = client(app, 'master')
@@ -130,7 +130,7 @@ def test_empty_database_returns_empty_catalog_and_availability(tmp_path):
 def test_partial_database_with_no_services_or_slots_is_safe(tmp_path):
     app = app_module.create_app({
         'TESTING': True,
-        'DATABASE': str(tmp_path / 'partial-empty.sqlite'),
+        'DEMO_MODE': True, 'DEMO_DATABASE': str(tmp_path / 'partial-empty.sqlite'),
         'SECRET_KEY': 'test-only',
     })
     with sqlite3.connect(app.config['DATABASE']) as connection:

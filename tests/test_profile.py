@@ -13,7 +13,7 @@ from tests.test_specialist_registration import APPLICATION, APPLY, ADMIN
 
 @pytest.fixture
 def app(tmp_path):
-    return create_app({'TESTING': True, 'DATABASE': str(tmp_path / 'test.sqlite'),
+    return create_app({'TESTING': True, 'DEMO_MODE': True, 'DEMO_DATABASE': str(tmp_path / 'test.sqlite'),
                        'UPLOAD_FOLDER': str(tmp_path / 'avatars'), 'SECRET_KEY': 'profile-tests'})
 
 

@@ -12,7 +12,7 @@ from tests.test_app import client, post
 def scenario(tmp_path, monkeypatch):
     clock = [datetime(2030, 5, 10, 9, 0)]
     monkeypatch.setattr(app_module, 'now', lambda: clock[0])
-    app = app_module.create_app({'TESTING': True, 'DATABASE': str(tmp_path / 'lifecycle.sqlite'), 'SECRET_KEY': 'test'})
+    app = app_module.create_app({'TESTING': True, 'DEMO_MODE': True, 'DEMO_DATABASE': str(tmp_path / 'lifecycle.sqlite'), 'SECRET_KEY': 'test'})
     customer, master = client(app), client(app, 'master')
     slot = customer.get('/api/slots/1').json['slots'][0]
     booking = post(customer, '/bookings', {'slot_id': slot['id'], 'address': 'Киров, Ленина 10'})

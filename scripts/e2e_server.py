@@ -19,7 +19,7 @@ with tempfile.TemporaryDirectory(prefix='svobodno-e2e-') as folder:
         mailbox[email] = url
 
     app = app_module.create_app({
-        'DATABASE': str(Path(folder) / 'test.sqlite'),
+        'DEMO_MODE': True, 'DEMO_DATABASE': str(Path(folder) / 'test.sqlite'),
         'TESTING': True,
         'UPLOAD_FOLDER': str(Path(folder) / 'uploads'),
         'APP_BASE_URL': 'http://127.0.0.1:5051',
