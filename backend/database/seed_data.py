@@ -240,11 +240,14 @@ def initialize_database(connection, current_time):
             connection.execute(f'ALTER TABLE {table} ADD COLUMN {field} {definition}')
     # Backfill immutable logins for accounts created before this migration.
     for row in connection.execute("SELECT id,email FROM users WHERE username IS NULL AND email IS NOT NULL ORDER BY id"):
-        base = ''.join(ch for ch in row['email'].split('@', 1)[0].lower() if ch.isalnum() or ch in '._-')[:24]
+        base = ''.join(ch for ch in row['email'].split('@', 1)[0].lower() if ch.isascii() and (ch.isalnum() or ch in '._-'))[:24]
         base = base or ('user' + str(row['id']))
         candidate = base
-        if connection.execute('SELECT 1 FROM users WHERE username=?', (candidate,)).fetchone():
-            candidate = base[:18] + str(row['id'])
+        suffix = 1
+        while connection.execute('SELECT 1 FROM users WHERE username=?', (candidate,)).fetchone():
+            marker = '_' + str(suffix)
+            candidate = base[:30 - len(marker)] + marker
+            suffix += 1
         connection.execute('UPDATE users SET username=? WHERE id=?', (candidate, row['id']))
     connection.execute("CREATE UNIQUE INDEX IF NOT EXISTS users_username_unique ON users(username) WHERE username IS NOT NULL")
     slot_columns = {row['name'] for row in connection.execute('PRAGMA table_info(slots)')}
