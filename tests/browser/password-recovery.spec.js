@@ -4,13 +4,15 @@ test.use({ trace: 'off' });
 
 test('request an email link, reset the password and sign in again', async ({ page }) => {
   const email = 'recovery-browser@example.test';
+  const username = 'recoverybrowser';
   const originalPassword = 'BrowserOriginal123';
   const newPassword = 'BrowserReplacement123';
   await page.goto('/');
   await page.locator('#account').click();
   await page.locator('#auth-switch').click();
   await page.getByLabel('Ваше имя').fill('Тест восстановления');
-  await page.getByLabel('Электронная почта').fill(email);
+  await page.getByLabel('Логин').fill(username);
+  await page.getByLabel('Логин').fill(username);
   await page.getByLabel('Пароль', { exact: true }).fill(originalPassword);
   await page.locator('#login-form button').click();
   await expect(page.locator('.dashboard')).toBeVisible();
