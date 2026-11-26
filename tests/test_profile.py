@@ -53,7 +53,7 @@ def test_details_and_password_are_shared_across_modes(app):
     assert post(master, '/login', {**credentials, 'password': details['current_password']}).status_code == 401
     assert post(master, '/login', {**credentials, 'password': details['new_password']}).status_code == 200
     with sqlite3.connect(app.config['DATABASE']) as connection:
-        stored = connection.execute('SELECT password FROM users WHERE email=?', (credentials['email'],)).fetchone()[0]
+        stored = connection.execute('SELECT password FROM users WHERE username=?', (credentials['username'],)).fetchone()[0]
         assert stored != details['new_password'] and check_password_hash(stored, details['new_password'])
 
 
