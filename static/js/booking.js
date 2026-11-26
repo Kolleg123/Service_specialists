@@ -280,7 +280,29 @@ class BookingFlow {
 
   async submit() {
     if (this.submitting || !this.slot) return;
-    if (!state.user) { login(() => profile(this.specialist.id, this.serviceId)); return; }
+    if (!state.user) {
+      const pending = {
+        specialist: this.specialist,
+        serviceId: this.serviceId,
+        slot: {...this.slot},
+        fields: {...this.fields},
+        day: this.day,
+        page: this.page
+      };
+      login(async () => {
+        const resumed = new BookingFlow(pending.specialist, pending.serviceId);
+        resumed.slot = pending.slot;
+        resumed.fields = pending.fields;
+        resumed.day = pending.day;
+        resumed.page = pending.page;
+        resumed.step = 3;
+        activeBooking = resumed;
+        resumed.open();
+        resumed.notice = 'Данные записи сохранены. Проверьте доступность времени перед подтверждением.';
+        resumed.render();
+      });
+      return;
+    }
     const snapshot = {...this.slot};
     const generation = this.generation;
     this.submitting = true;
