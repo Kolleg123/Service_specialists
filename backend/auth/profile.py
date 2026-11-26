@@ -47,7 +47,7 @@ def update_details(connection, user_id, data):
     if not user:
         raise ProfileError('Войдите в личный кабинет', 401)
     if email is not None and email != user['email']:
-        if connection.execute('SELECT 1 FROM users WHERE email=? AND id!=?', (email, user_id)).fetchone():
+        if connection.execute('SELECT 1 FROM users WHERE email=? COLLATE NOCASE AND id!=?', (email, user_id)).fetchone():
             raise ProfileError('Эта почта уже используется другим аккаунтом', 409)
         connection.execute('UPDATE users SET email=? WHERE id=?', (email, user_id))
         connection.execute('DELETE FROM password_reset_tokens WHERE user_id=?', (user_id,))
