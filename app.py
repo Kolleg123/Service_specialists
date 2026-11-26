@@ -295,7 +295,11 @@ def create_app(test_config=None):
             return fail('Специалист не найден', 404)
         with db() as c:
             c.execute('BEGIN IMMEDIATE')
+            before = c.execute('SELECT id,name,active,deleted FROM specialists WHERE id=?', (ident,)).fetchone()
             photo = retire_specialist(c, ident)
+            after = c.execute('SELECT id,name,active,deleted FROM specialists WHERE id=?', (ident,)).fetchone()
+            audit(c, user['id'], 'specialist_deleted', 'specialist', ident,
+                  dict(before) if before else None, dict(after) if after else None, None)
         cleanup_avatars((photo,))
         return jsonify(ok=True)
 
@@ -887,7 +891,12 @@ def create_app(test_config=None):
             return fail('Услуга не найдена', 404)
         try:
             with db() as c:
+                before = c.execute('SELECT moderation_status,draft_status,draft_reason,active,revision FROM services WHERE id=?', (ident,)).fetchone()
                 service = decide_service(c, ident, request.get_json(), now)
+                after = c.execute('SELECT moderation_status,draft_status,draft_reason,active,revision FROM services WHERE id=?', (ident,)).fetchone()
+                audit(c, user['id'], 'service_moderation', 'service', ident,
+                      dict(before) if before else None, dict(after) if after else None,
+                      request.get_json().get('reason'))
         except ModerationError as error:
             return fail(str(error), error.status)
         return jsonify(service=service)
