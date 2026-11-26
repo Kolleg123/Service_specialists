@@ -44,7 +44,7 @@ def update_details(connection, user_id, data):
             raise ProfileError('Текущий пароль указан неверно', 403)
         if len(new) < 8 or new != confirmation:
             raise ProfileError('Новый пароль должен содержать от 8 до 128 символов, а подтверждение должно совпадать')
-        connection.execute('UPDATE users SET password=? WHERE id=?', (generate_password_hash(new), user_id))
+        connection.execute('UPDATE users SET password=?,session_version=session_version+1 WHERE id=?', (generate_password_hash(new), user_id))
         connection.execute('DELETE FROM password_reset_tokens WHERE user_id=?', (user_id,))
     connection.execute('UPDATE users SET name=? WHERE id=?', (name, user_id))
     connection.execute('UPDATE specialists SET name=? WHERE id=?', (name, user['specialist_id']))

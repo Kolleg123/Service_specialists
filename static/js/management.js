@@ -92,12 +92,19 @@ function bindServiceForm(form, path, categories, initialCategory, inModal = fals
   data.price = Number(data.price);
   data.duration = Number(data.duration);
   const button = $('button[type=submit]', form);
+  if (button.disabled) return;
   button.disabled = true;
   try {
-   await api(path, data);
+   if (path === '/master/services') {
+    await submitOperation(path, data);
+    form.reset();
+    form.updateServiceDirectory(categories);
+   } else {
+    await api(path, data);
+   }
    if (inModal && form.isConnected) closeModal();
    toast('Услуга отправлена на проверку');
-   await dashboard();
+   dashboard().catch(error => toast(error.message));
   } catch (error) {
    $('.form-error', form).textContent = error.message;
   } finally {

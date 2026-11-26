@@ -82,6 +82,7 @@ class BookingFlow {
     this.generation = 0;
     this.loading = false;
     this.submitting = false;
+    this.pendingConfirmation = false;
     this.error = '';
     this.notice = '';
     this.fields = {address: '', note: '', quantity: 1};
@@ -101,7 +102,7 @@ class BookingFlow {
       <nav class="booking-steps" aria-label="Этапы записи"></nav>
       <label class="field">Услуга<select id="booking-service">${s.services.map(v => `<option value="${v.id}">${esc(v.title)} · ${money(v.price)} · ${v.duration} мин</option>`).join('')}</select></label>
       <p class="muted" data-profile-service-category></p>
-      <p class="timezone-note">Время Кирова · UTC+3. Оплата после встречи.</p>
+      <p class="timezone-note">Время Кирова · UTC+3.</p>
       <div id="booking-notice" role="status" aria-live="polite"></div>
       <div id="step-content"></div>
     </section>`);
@@ -163,9 +164,9 @@ class BookingFlow {
   render() {
     if (!this.alive) return;
     $('#booking-flow').dataset.step = this.step;
-    $('#booking-service').disabled = this.submitting || !this.service;
+    $('#booking-service').disabled = this.submitting || this.pendingConfirmation || !this.service;
     $('.booking-steps').innerHTML = ['Услуга', this.dateOnly ? 'Дата' : 'Дата и время', 'Подтверждение'].map((label, i) =>
-      `<button type="button" data-step="${i + 1}" ${this.submitting || (i === 2 && !this.slot) || (i > 0 && (!this.service || this.ownProfile)) ? 'disabled' : ''} ${this.step === i + 1 ? 'aria-current="step"' : ''}><span>${i + 1}</span>${label}</button>`).join('');
+      `<button type="button" data-step="${i + 1}" ${this.submitting || this.pendingConfirmation || (i === 2 && !this.slot) || (i > 0 && (!this.service || this.ownProfile)) ? 'disabled' : ''} ${this.step === i + 1 ? 'aria-current="step"' : ''}><span>${i + 1}</span>${label}</button>`).join('');
     $$('.booking-steps [data-step]').forEach(b => b.onclick = () => {
       this.step = Number(b.dataset.step);
       if (this.step === 2) this.refresh('Проверьте актуальное расписание и выберите время.');
@@ -261,9 +262,12 @@ class BookingFlow {
       ${s.mode === 'Выезд' ? `<label class="field">Адрес выезда<input name="address" value="${esc(this.fields.address)}" placeholder="Улица, дом, квартира" minlength="5" maxlength="250" required></label>` : ''}
       <label class="field">Комментарий (необязательно)<textarea name="note" maxlength="1000" placeholder="Что важно знать специалисту?">${esc(this.fields.note)}</textarea></label>
       <p class="form-error" role="alert"></p>
-      <div class="booking-total"><span>Итого <strong id="total-price">${money(s.price * this.fields.quantity)}</strong></span><button id="confirm-booking" class="button" ${bookingBlocked ? 'disabled' : ''}>${state.user ? 'Подтвердить запись' : 'Войти и записаться'} →</button></div>
+      <div class="booking-total"><span>Итого <strong id="total-price">${money(s.price * this.fields.quantity)}</strong></span><button id="confirm-booking" class="button" ${bookingBlocked ? 'disabled' : ''}>${this.pendingConfirmation ? 'Проверить запись' : state.user ? 'Подтвердить запись' : 'Войти и записаться'} →</button></div>
       <p class="muted">${this.ownProfile ? 'Записаться на собственную услугу нельзя.' : bookingBlocked ? 'Для записи войдите как клиент.' : 'Перед подтверждением мы ещё раз проверим свободные места.'}</p></form>`;
     const form = $('#book-form');
+    if (this.pendingConfirmation) {
+      for (const field of form.querySelectorAll('input, textarea')) field.readOnly = true;
+    }
     form.oninput = () => {
       this.fields = {address: form.elements.address?.value || '', note: form.elements.note.value, quantity: Number(form.elements.quantity.value)};
       $('#total-price').textContent = money(s.price * this.fields.quantity);
@@ -281,46 +285,63 @@ class BookingFlow {
   async submit() {
     if (this.submitting || !this.slot) return;
     if (!state.user) { login(() => profile(this.specialist.id, this.serviceId)); return; }
-    const snapshot = {...this.slot};
-    const generation = this.generation;
+    const snapshot = this.slot;
+    const selection = snapshot.id === null
+      ? {booking_mode: snapshot.booking_mode, date: snapshot.date, ends_at: snapshot.ends_at}
+      : {slot_id: snapshot.id};
+    const payload = {...selection, service_id: this.serviceId, starts_at: snapshot.starts_at,
+      duration: snapshot.duration, price: snapshot.price, ...this.fields};
+    const checking = this.pendingConfirmation || pendingOperations.has(operationIdentity('/bookings', payload));
     this.submitting = true;
     $('#booking-service').disabled = true;
-    $$('.booking-steps [data-step]').forEach(b => b.disabled = true);
+    $$('.booking-steps [data-step]').forEach(button => button.disabled = true);
+    for (const field of $('#book-form').querySelectorAll('input, textarea')) field.readOnly = true;
     $('#confirm-booking').disabled = true;
-    $('#confirm-booking').textContent = 'Проверяем доступность…';
+    $('#confirm-booking').textContent = checking ? 'Проверяем результат…' : 'Подтверждаем запись…';
+    let booking;
+    let sent = checking;
     try {
-      const {slots} = await api(`/slots/${this.specialist.id}?service_id=${this.serviceId}`);
-      if (!this.alive || generation !== this.generation) return;
-      const live = slots.find(s => s.booking_mode === snapshot.booking_mode && this.slotKey(s) === this.slotKey(snapshot));
-      if (!live || live.remaining < this.fields.quantity || ['service_id','starts_at','ends_at','duration','price'].some(k => live[k] !== snapshot[k])) {
-        await this.recover('Выбранное время занято или условия услуги изменились.');
-        return;
+      if (!checking) {
+        const {slots} = await api(`/slots/${this.specialist.id}?service_id=${this.serviceId}`);
+        if (!this.alive) return;
+        const live = slots.find(s => s.booking_mode === snapshot.booking_mode && this.slotKey(s) === this.slotKey(snapshot));
+        if (!live || live.remaining < payload.quantity || ['service_id','starts_at','ends_at','duration','price'].some(
+          field => live[field] !== snapshot[field])) {
+          await this.recover('Выбранное время занято или условия услуги изменились.');
+          return;
+        }
       }
-      const selection = snapshot.id === null
-        ? {booking_mode: snapshot.booking_mode, date: snapshot.date, ends_at: snapshot.ends_at}
-        : {slot_id: snapshot.id};
-      await api('/bookings', {...selection, service_id: this.serviceId, starts_at: snapshot.starts_at,
-        duration: snapshot.duration, price: snapshot.price, ...this.fields});
-      closeModal();
-      toast('Вы записаны! Подробности — в личном кабинете.');
-      dashboardMode = 'client';
-      dashboardTab = 'bookings';
-      dashboardStatusFilter = 'all';
-      if (location.hash === '#dashboard') await dashboard();
-      else location.hash = 'dashboard';
+      sent = true;
+      booking = await submitOperation('/bookings', payload);
     } catch (error) {
       if (!this.alive) return;
-      if (error.status === 409) {
+      this.submitting = false;
+      this.pendingConfirmation = sent && (uncertainOperation(error) || (checking && [401, 403].includes(error.status)));
+      if (this.pendingConfirmation) {
+        this.notice = 'Ответ не получен или результат пока не подтверждён. Нажмите «Проверить запись», когда связь восстановится.';
+        this.render();
+        if ([401, 403].includes(error.status)) $('.form-error', $('#book-form')).textContent = error.message;
+      } else if (error.status === 409) {
         await this.recover(error.message);
       } else {
-        this.submitting = false;
+        this.notice = 'Запись не создана.';
         this.render();
         $('.form-error', $('#book-form')).textContent = error.message;
       }
+      return;
     } finally {
       this.submitting = false;
     }
+    if (this.alive) closeModal();
+    toast(`Запись №${booking.id} подтверждена. Подробности — в личном кабинете.`);
+    state.newBookingId = booking.id;
+    dashboardMode = 'client';
+    dashboardTab = 'bookings';
+    dashboardStatusFilter = 'all';
+    if (location.hash === '#dashboard') dashboard().catch(error => toast(error.message));
+    else location.hash = 'dashboard';
   }
+
 }
 
 $('#modal').addEventListener('close', () => { if (!$('#modal').open) activeBooking = null; });
