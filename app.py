@@ -154,16 +154,16 @@ def create_app(test_config=None):
     def current():
         session.setdefault('csrf', secrets.token_hex(24))
         with db() as c:
-            user = c.execute('SELECT id,name,email,role,specialist_id,avatar FROM users WHERE id=? AND role!="deleted"', (session.get('uid'),)).fetchone()
+            user = c.execute('SELECT id,name,username,email,role,specialist_id,avatar FROM users WHERE id=? AND role!="deleted"', (session.get('uid'),)).fetchone()
         return jsonify(user=dict(user) if user else None, csrf=session['csrf'])
 
     @app.post('/api/login')
     def login():
         data = request.get_json()
         with db() as c:
-            user = c.execute('SELECT * FROM users WHERE email=?', (str(data.get('email', '')).strip().lower(),)).fetchone()
+            user = c.execute('SELECT * FROM users WHERE username=?', (str(data.get('username', '')).strip().lower(),)).fetchone()
         if not user or not check_password_hash(user['password'], str(data.get('password', ''))):
-            return fail('Неверная почта или пароль', 401)
+            return fail('Неверный логин или пароль', 401)
         session.clear()
         session.update(uid=user['id'], csrf=secrets.token_hex(24))
         return current()
@@ -171,15 +171,22 @@ def create_app(test_config=None):
     @app.post('/api/register')
     def register():
         d = request.get_json()
-        name, email, password = (str(d.get(k, '')).strip() for k in ('name', 'email', 'password'))
-        if not 2 <= len(name) <= 80 or '@' not in email or len(email) > 120 or not 8 <= len(password) <= 128:
-            return fail('Укажите имя, корректную почту и пароль от 8 до 128 символов')
+        name = str(d.get('name', '')).strip()
+        username = str(d.get('username', '')).strip().lower()
+        email = str(d.get('email', '')).strip().lower()
+        password = str(d.get('password', ''))
+        if not 2 <= len(name) <= 80 or not re.fullmatch(r'[a-z0-9_.-]{3,30}', username):
+            return fail('Укажите имя и логин длиной 3–30 символов (латинские буквы, цифры, точка, дефис или подчёркивание)')
+        if not re.fullmatch(r'[^\s@]+@[^\s@]+\.[^\s@]+', email) or len(email) > 120 or not 8 <= len(password) <= 128:
+            return fail('Укажите корректную почту и пароль от 8 до 128 символов')
         try:
             with db() as c:
-                uid = c.execute('INSERT INTO users(name,email,password,role) VALUES(?,?,?,?)',
-                                (name, email.lower(), generate_password_hash(password), 'client')).lastrowid
+                uid = c.execute('INSERT INTO users(name,username,email,password,role) VALUES(?,?,?,?,?)',
+                                (name, username, email, generate_password_hash(password), 'client')).lastrowid
         except sqlite3.IntegrityError:
-            return fail('Эта почта уже зарегистрирована', 409)
+            with db() as c:
+                duplicate_login = c.execute('SELECT 1 FROM users WHERE username=?', (username,)).fetchone()
+            return fail('Этот логин уже занят' if duplicate_login else 'Эта почта уже зарегистрирована', 409)
         session.clear()
         session.update(uid=uid, csrf=secrets.token_hex(24))
         return current()
