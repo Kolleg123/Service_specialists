@@ -70,6 +70,10 @@ def create_app(test_config=None):
         finally:
             con.close()
 
+    def valid_sqlite_id(value):
+        """Accept only positive SQLite INTEGER identifiers (never bool or coercible strings)."""
+        return type(value) is int and 1 <= value < 2**63
+
     def fail(message, status=400):
         return jsonify(error=message), status
 
@@ -89,6 +93,15 @@ def create_app(test_config=None):
 
     @app.before_request
     def csrf():
+        for value in (request.view_args or {}).values():
+            if type(value) is int and not valid_sqlite_id(value):
+                return fail('Некорректный идентификатор', 400)
+        for field in ('id', 'ident', 'specialist_id', 'service_id', 'slot_id', 'booking_id',
+                      'notification_id', 'application_id', 'review_id'):
+            if field in request.args:
+                raw = request.args.get(field, '')
+                if not raw.isdecimal() or not valid_sqlite_id(int(raw)):
+                    return fail('Некорректный идентификатор', 400)
         if request.method in ('POST', 'PATCH', 'DELETE'):
             if not session.get('csrf') or request.headers.get('X-CSRF-Token') != session['csrf']:
                 return fail('Обновите страницу и повторите действие', 403)
@@ -102,6 +115,15 @@ def create_app(test_config=None):
                 return fail('Ожидается JSON', 415)
             if not isinstance(request.get_json(), dict):
                 return fail('Ожидается JSON-объект')
+            data = request.get_json()
+            for field in ('slot_id', 'service_id', 'booking_id', 'specialist_id', 'user_id',
+                          'review_id', 'application_id', 'notification_id'):
+                value = data.get(field)
+                if value is not None and not valid_sqlite_id(value):
+                    return fail('Некорректный идентификатор', 400)
+            if 'ids' in data and (not isinstance(data['ids'], list) or
+                                  any(not valid_sqlite_id(value) for value in data['ids'])):
+                return fail('Список содержит некорректный идентификатор', 400)
 
     @app.after_request
     def password_recovery_headers(response):
