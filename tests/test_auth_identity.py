@@ -23,8 +23,8 @@ def post(client, path, data):
     return client.post('/api' + path, json=data, headers={'X-CSRF-Token': csrf})
 
 
-def login(client, username='client'):
-    return post(client, '/login', {'username': username, 'password': 'Demo2026!'})
+def login(client, username='client', password='Demo2026!'):
+    return post(client, '/login', {'username': username, 'password': password})
 
 
 def test_login_uses_username_not_email_and_legacy_accounts_are_migrated(app):
@@ -47,7 +47,7 @@ def test_registration_requires_unique_immutable_username_and_unique_email(app):
     assert post(client, '/logout', {}).status_code == 200
     assert post(client, '/register', {**payload, 'email': 'other@example.test'}).status_code == 409
     assert post(client, '/register', {**payload, 'username': 'another'}).status_code == 409
-    assert login(client, 'newuser').status_code == 200
+    assert login(client, 'newuser', 'NewPassword123').status_code == 200
 
 
 def test_profile_can_change_email_but_cannot_change_username_and_recovery_uses_new_email(app):
