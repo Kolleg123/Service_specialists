@@ -15,13 +15,13 @@ def schedule_reminders(connection, current_time, lead_minutes=(1440, 60)):
         start = datetime.fromisoformat(booking[2])
         for minutes in lead_minutes:
             due = start - timedelta(minutes=minutes)
-            if due > current_time:
+            if due <= current_time:
                 continue
             kind = f'reminder_{minutes}m'
             key = f'booking:{booking[0]}:{kind}'
             before = connection.total_changes
             enqueue(connection, key, booking[1], kind,
                     f'Напоминание о записи: {booking[4]} — {start:%d.%m.%Y %H:%M}',
-                    current_time, booking_id=booking[0])
+                    due.isoformat(timespec='minutes'), booking_id=booking[0])
             created += connection.total_changes - before
     return created
