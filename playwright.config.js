@@ -1,4 +1,5 @@
 const { defineConfig } = require('@playwright/test');
+const python = process.platform === 'win32' ? '.venv\\Scripts\\python.exe' : '.venv/bin/python';
 module.exports = defineConfig({
   testDir: './tests/browser',
   workers: 1,
@@ -11,7 +12,7 @@ module.exports = defineConfig({
     trace: 'retain-on-failure'
   },
   webServer: {
-    command: '.venv/bin/python scripts/e2e_server.py',
+    command: `${python} scripts/e2e_server.py`,
     url: 'http://127.0.0.1:5051/api/session',
     reuseExistingServer: false,
     timeout: 30000

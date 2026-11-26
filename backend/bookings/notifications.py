@@ -28,6 +28,6 @@ def notify_booking(connection, booking_id, event, current_time):
         details += f". Причина: {booking['cancel_reason']}"
     created_at = current_time.isoformat(timespec='seconds')
     connection.executemany('''INSERT INTO notifications(user_id,booking_id,event,message,created_at)
-        VALUES(?,?,?,?,?) ON CONFLICT(user_id,booking_id,event) DO NOTHING''',
+        VALUES(?,?,?,?,?) ON CONFLICT(user_id,booking_id,event) WHERE payment_id IS NULL DO NOTHING''',
         [(user_id, booking_id, event, message + details,
           created_at) for user_id, message in recipients])

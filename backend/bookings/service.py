@@ -156,6 +156,7 @@ def _persist_slot(connection, slot):
 
 
 def create_booking(connection, user_id, data, clock):
+    # The caller holds a write transaction across replay lookup, capacity and notifications.
     qty = data.get('quantity', 1)
     if type(qty) is not int or not 1 <= qty <= 50:
         raise BookingError('Количество мест должно быть от 1 до 50')
@@ -171,7 +172,6 @@ def create_booking(connection, user_id, data, clock):
     if len(address) > 250 or len(note) > 1000:
         raise BookingError('Слишком длинный адрес или комментарий')
 
-    connection.execute('BEGIN IMMEDIATE')
     user = connection.execute("SELECT specialist_id FROM users WHERE id=? AND role IN ('client','master')",
                               (user_id,)).fetchone()
     if not user:

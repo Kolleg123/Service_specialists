@@ -15,9 +15,13 @@ def connect(path):
     return c
 
 
-def initialize(path, when=datetime(2030, 5, 10, 9)):
+def initialize(path, when=datetime(2030, 5, 10, 9), *, legacy_demo=False):
     with connect(path) as c:
-        initialize_database(c, when)
+        if legacy_demo:
+            c.executescript(SCHEMA)
+            c.execute("INSERT INTO seed_meta(name,value) VALUES('database_mode','demo')")
+            c.commit()
+        initialize_database(c, when, demo_mode=True)
 
 
 def snapshot(path):
@@ -50,7 +54,7 @@ def test_legacy_partial_database_with_one_specialist_is_repaired(tmp_path):
         c.execute('INSERT INTO specialists(id,name,profession,category,experience,education,skills,bio,photo,location) VALUES(?,?,?,?,?,?,?,?,?,?)',
                   (1, *p[:7], '/static/photos/1.jpg', p[8]))
         c.execute("INSERT INTO users(id,name,email,password,role) VALUES(900,'Мой пользователь','own@example.test','my-hash','client')")
-    initialize(path)
+    initialize(path, legacy_demo=True)
     first = snapshot(path)
     assert len(first['specialists']) == 6
     assert len(first['users']) == 6
@@ -94,7 +98,8 @@ def test_failure_rolls_back_and_next_start_repairs(tmp_path, monkeypatch):
         m.setattr(seed_data, 'ensure', interrupted)
         with pytest.raises(RuntimeError, match='Simulated interruption'):
             initialize(path)
-    assert snapshot(path)['specialists'] == []
+    with connect(path) as connection:
+        assert not connection.execute("SELECT 1 FROM sqlite_master WHERE name='specialists'").fetchone()
     initialize(path)
     first = snapshot(path)
     assert len(first['services']) == 11 and len(first['bookings']) == 6
@@ -109,7 +114,7 @@ def test_legacy_full_database_is_adopted_without_duplicates(tmp_path):
         c.execute('DROP TABLE seed_entities')
         c.execute('DROP TABLE seed_meta')
     before = snapshot(path)
-    initialize(path, datetime(2031, 1, 1))
+    initialize(path, datetime(2031, 1, 1), legacy_demo=True)
     assert snapshot(path) == before
 
 
@@ -119,7 +124,7 @@ def test_occupied_seed_ids_do_not_overwrite_unrelated_data(tmp_path):
         c.executescript(SCHEMA)
         c.execute("INSERT INTO specialists(id,name,profession,active) VALUES(1,'Своя мастерская','Другая профессия',1)")
         c.execute("INSERT INTO users(id,name,email,password,role) VALUES(1,'Свой клиент','own@example.test','original-hash','client')")
-    initialize(path)
+    initialize(path, legacy_demo=True)
     with connect(path) as c:
         assert c.execute('SELECT name FROM specialists WHERE id=1').fetchone()[0] == 'Своя мастерская'
         assert c.execute('SELECT password FROM users WHERE id=1').fetchone()[0] == 'original-hash'
@@ -127,7 +132,7 @@ def test_occupied_seed_ids_do_not_overwrite_unrelated_data(tmp_path):
         assert mapped != 1
         master = c.execute("SELECT specialist_id FROM users WHERE email='master@svobodno.demo'").fetchone()[0]
         assert master == mapped
-    app = create_app({'TESTING': True, 'DATABASE': str(path)})
+    app = create_app({'TESTING': True, 'DEMO_MODE': True, 'DEMO_DATABASE': str(path)})
     result = post(app.test_client(), '/consult', {'message': 'Протекает кран'})
     assert result.json['specialist_id'] == mapped
 
@@ -163,7 +168,7 @@ def test_legacy_history_only_keeps_original_anchor_and_history(tmp_path):
         c.execute('DELETE FROM slots WHERE id NOT IN (SELECT slot_id FROM bookings)')
         c.execute('DROP TABLE seed_entities')
         c.execute('DROP TABLE seed_meta')
-    initialize(path, datetime(2031, 1, 1))
+    initialize(path, datetime(2031, 1, 1), legacy_demo=True)
     recovered = snapshot(path)
     assert recovered['bookings'] == original['bookings']
     assert recovered['reviews'] == original['reviews']

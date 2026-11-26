@@ -8,7 +8,7 @@ from app import create_app, now
 
 @pytest.fixture
 def app(tmp_path):
-    return create_app({'TESTING': True, 'DATABASE': str(tmp_path / 'test.sqlite'), 'SECRET_KEY': 'test-only'})
+    return create_app({'TESTING': True, 'DEMO_MODE': True, 'DEMO_DATABASE': str(tmp_path / 'test.sqlite'), 'SECRET_KEY': 'test-only'})
 
 
 def client(app, role='client'):

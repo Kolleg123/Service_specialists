@@ -1,8 +1,9 @@
-"""Transactional, resumable demo initialization. Never replace existing rows."""
+"""Database migrations and resumable demo data initialization."""
 from datetime import datetime, timedelta
 from werkzeug.security import generate_password_hash
 
 from backend.support import initialize_support
+from backend.bookings.payments import PAYMENT_SCHEMA
 
 from backend.database.service_categories import (active_category_id, backfill_categories, backfill_profile_groups,
                                                 infer_category, initialize_categories, profile_group)
@@ -53,6 +54,19 @@ CREATE UNIQUE INDEX IF NOT EXISTS one_pending_specialist_application
     ON specialist_applications(user_id) WHERE status='pending';
 CREATE INDEX IF NOT EXISTS specialist_application_history ON specialist_applications(user_id,id DESC);
 
+CREATE TABLE IF NOT EXISTS revoked_sessions(
+    sid TEXT PRIMARY KEY,
+    expires_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS revoked_sessions_expiry ON revoked_sessions(expires_at);
+CREATE TABLE IF NOT EXISTS idempotent_operations(
+    user_id INTEGER NOT NULL REFERENCES users(id),
+    operation TEXT NOT NULL,
+    operation_key TEXT NOT NULL,
+    fingerprint TEXT NOT NULL,
+    response TEXT NOT NULL,
+    PRIMARY KEY(user_id,operation,operation_key)
+);
 CREATE TABLE IF NOT EXISTS seed_meta(name TEXT PRIMARY KEY,value TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS seed_entities(seed_key TEXT PRIMARY KEY,table_name TEXT NOT NULL,entity_id INTEGER NOT NULL);
 """
@@ -65,24 +79,28 @@ CREATE TABLE notifications(
     service_id INTEGER REFERENCES services(id) ON DELETE CASCADE,
     specialist_application_id INTEGER REFERENCES specialist_applications(id) ON DELETE CASCADE,
     support_request_id INTEGER REFERENCES support_requests(id),
+    payment_id TEXT REFERENCES booking_payments(id),
     event TEXT NOT NULL,
     message TEXT NOT NULL,
     created_at TEXT NOT NULL,
     is_read INTEGER NOT NULL DEFAULT 0 CHECK(is_read IN (0,1)),
     CHECK(
         (booking_id IS NOT NULL AND service_id IS NULL AND specialist_application_id IS NULL
-            AND support_request_id IS NULL AND event IN ('confirmed','cancelled','completed'))
+            AND support_request_id IS NULL AND (
+                (payment_id IS NULL AND event IN ('confirmed','cancelled','completed'))
+                OR (payment_id IS NOT NULL AND event IN ('payment_pending','payment_succeeded',
+                    'payment_canceled','payment_failed','refund_pending','refund_succeeded','refund_canceled'))))
         OR
-        (booking_id IS NULL AND service_id IS NOT NULL AND specialist_application_id IS NULL
+        (payment_id IS NULL AND booking_id IS NULL AND service_id IS NOT NULL AND specialist_application_id IS NULL
             AND support_request_id IS NULL AND event IN ('service_approved','service_rejected'))
         OR
-        (booking_id IS NULL AND service_id IS NULL AND specialist_application_id IS NOT NULL
+        (payment_id IS NULL AND booking_id IS NULL AND service_id IS NULL AND specialist_application_id IS NOT NULL
             AND support_request_id IS NULL AND event IN ('specialist_approved','specialist_rejected'))
         OR
-        (booking_id IS NULL AND service_id IS NULL AND specialist_application_id IS NULL
+        (payment_id IS NULL AND booking_id IS NULL AND service_id IS NULL AND specialist_application_id IS NULL
             AND support_request_id IS NOT NULL AND event IN ('support_created','support_resolved'))
     ),
-    UNIQUE(user_id,booking_id,event),
+    UNIQUE(user_id,payment_id,event),
     UNIQUE(user_id,specialist_application_id),
     UNIQUE(user_id,support_request_id,event)
 )
@@ -115,17 +133,19 @@ def migrate_notifications(connection):
     columns = {row['name'] for row in connection.execute('PRAGMA table_info(notifications)')}
     schema = connection.execute("SELECT sql FROM sqlite_master WHERE name='notifications'").fetchone()
     if columns and ('support_request_id' not in columns or 'specialist_application_id' not in columns or
-                    'UNIQUE(user_id,service_id)' in schema['sql']):
+                    'payment_id' not in columns or 'UNIQUE(user_id,service_id)' in schema['sql']):
         connection.execute('ALTER TABLE notifications RENAME TO previous_notifications')
         connection.execute(NOTIFICATIONS_TABLE)
         fields = 'id,user_id,booking_id,event,message,created_at,is_read'
-        for field in ('service_id', 'specialist_application_id', 'support_request_id'):
+        for field in ('service_id', 'specialist_application_id', 'support_request_id', 'payment_id'):
             if field in columns:
                 fields += ',' + field
         connection.execute(f"INSERT INTO notifications({fields}) SELECT {fields} FROM previous_notifications")
         connection.execute('DROP TABLE previous_notifications')
     elif not columns:
         connection.execute(NOTIFICATIONS_TABLE)
+    connection.execute('''CREATE UNIQUE INDEX IF NOT EXISTS notification_booking_event
+        ON notifications(user_id,booking_id,event) WHERE payment_id IS NULL''')
     connection.execute('CREATE INDEX IF NOT EXISTS notification_inbox ON notifications(user_id,id DESC)')
 
 
@@ -229,10 +249,18 @@ def ensure(connection, key, table, match, values, preferred_id=None):
     return ident
 
 
-def initialize_database(connection, current_time):
-    connection.executescript(SCHEMA)
-    connection.execute('BEGIN IMMEDIATE')
+def initialize_database(connection, current_time, demo_mode):
+    connection.executescript('BEGIN IMMEDIATE;\n' + SCHEMA)
+    mode = 'demo' if demo_mode else 'ordinary'
+    previous = connection.execute("SELECT value FROM seed_meta WHERE name='database_mode'").fetchone()
+    if previous and previous['value'] != mode:
+        raise ValueError('База создана для другого режима работы')
+    if demo_mode and not previous and connection.execute(
+            'SELECT 1 FROM users UNION ALL SELECT 1 FROM specialists LIMIT 1').fetchone():
+        raise ValueError('Для демо укажите новый файл SQLite. Существующую базу сохраните отдельно.')
+    connection.execute("INSERT OR IGNORE INTO seed_meta(name,value) VALUES('database_mode',?)", (mode,))
     for table, field, definition in (
+        ('users', 'session_version', 'INTEGER NOT NULL DEFAULT 0'),
         ('users', 'avatar', 'TEXT'), ('specialists', 'deleted', 'INTEGER NOT NULL DEFAULT 0')
     ):
         if field not in {row['name'] for row in connection.execute(f'PRAGMA table_info({table})')}:
@@ -244,8 +272,18 @@ def initialize_database(connection, current_time):
         connection.execute('ALTER TABLE slots ADD COLUMN ends_at TEXT')
     migrate_service_moderation(connection)
     initialize_support(connection)
+    connection.execute(PAYMENT_SCHEMA)
+    connection.execute('CREATE INDEX IF NOT EXISTS payment_by_booking ON booking_payments(booking_id)')
+    connection.execute('CREATE INDEX IF NOT EXISTS payment_due ON booking_payments(shop_id,next_check_at)')
     migrate_notifications(connection)
     initialize_categories(connection)
+    if demo_mode:
+        seed_demo(connection, current_time)
+    backfill_categories(connection)
+    backfill_profile_groups(connection)
+
+
+def seed_demo(connection, current_time):
     specialist_ids = {}
     for index, person in enumerate(PEOPLE, 1):
         keys = ['name','profession','category','experience','education','skills','bio']
@@ -278,9 +316,6 @@ def initialize_database(connection, current_time):
                           connection, infer_category(title, PEOPLE[specialist - 1][1])))
         service_ids[index] = ensure(connection, f'service:{index}', 'services',
                                     {'specialist_id': values['specialist_id'], 'title': title}, values, index)
-
-    backfill_categories(connection)
-    backfill_profile_groups(connection)
 
     anchor_row = connection.execute("SELECT value FROM seed_meta WHERE name='anchor_date'").fetchone()
     if anchor_row:

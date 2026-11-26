@@ -13,7 +13,7 @@ from tests.test_app import client, post
 def app(tmp_path, monkeypatch):
     monday = datetime(2030, 5, 6, 8)
     monkeypatch.setattr(app_module, 'now', lambda: monday)
-    return app_module.create_app({'TESTING': True, 'DATABASE': str(tmp_path / 'schedule.sqlite'),
+    return app_module.create_app({'TESTING': True, 'DEMO_MODE': True, 'DEMO_DATABASE': str(tmp_path / 'schedule.sqlite'),
                                   'SECRET_KEY': 'test-only'})
 
 

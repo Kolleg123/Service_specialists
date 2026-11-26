@@ -158,7 +158,7 @@ def test_upgrade_preserves_published_services_manual_slots_and_read_notification
             VALUES(99,99,99,1,'confirmed',?,500)""", (starts_at,))
         connection.execute("""INSERT INTO notifications VALUES(99,99,99,'confirmed','Уже прочитано',?,1)""",
                            (starts_at,))
-    config = {'TESTING': True, 'DATABASE': str(database), 'SECRET_KEY': 'test-only'}
+    config = {'TESTING': True, 'DEMO_MODE': True, 'DEMO_DATABASE': str(database), 'SECRET_KEY': 'test-only'}
     for expected in ('plumbing', 'painting'):
         browser = create_app(config).test_client()
         legacy = browser.get('/api/services/99').json['service']

@@ -1,8 +1,10 @@
 import hashlib
+import ipaddress
 import os
 import re
 import secrets
 import sqlite3
+import time
 from datetime import datetime, timedelta
 from pathlib import Path
 from functools import wraps
@@ -12,11 +14,14 @@ from zoneinfo import ZoneInfo
 from dotenv import load_dotenv
 from flask import Flask, jsonify, request, session, send_from_directory
 from werkzeug.security import generate_password_hash, check_password_hash
+from backend.bookings.payments import Payments
 from backend.bookings.schedule import save_schedule, schedule_for
 from backend.bookings.service import BookingError, available_slots, create_booking
 from backend.bookings.lifecycle import (CUSTOMER_ROLES, booking_interval, booking_policy, cancellation_reason,
                                store_transition, transition_booking, upcoming_master_bookings)
-from backend.auth.password_recovery import send_recovery_email
+from backend.auth.password_recovery import RecoveryDelivery
+from backend.auth.runtime import allowed_account, configure, demo_email, env_flag, register_admin_command
+from backend.database.idempotency import IdempotencyError, Operation
 from backend.auth.profile import (AVATAR_NAME, IMAGE_TYPES, ProfileError, account, remove_unused_avatars,
                                   retire_account, retire_specialist, set_avatar, update_details, validate_avatar)
 from backend.database.category_management import admin_directory, remove_category, save_category
@@ -37,27 +42,18 @@ def now():
 
 def create_app(test_config=None):
     app = Flask(__name__, static_folder='static')
-    app.config.update(DATABASE=os.path.join(app.instance_path, 'svobodno.sqlite'),
-                      UPLOAD_FOLDER=os.path.join(app.instance_path, 'uploads'), SESSION_COOKIE_HTTPONLY=True,
-                      SESSION_COOKIE_SAMESITE='Lax', SESSION_COOKIE_SECURE=os.environ.get('COOKIE_SECURE', '').lower() in ('1', 'true', 'yes'), MAX_CONTENT_LENGTH=1024 * 1024,
+    app.config.update(SESSION_COOKIE_HTTPONLY=True, SESSION_COOKIE_SAMESITE='Lax',
+                      SESSION_COOKIE_SECURE=env_flag('COOKIE_SECURE'), MAX_CONTENT_LENGTH=1024 * 1024,
                       SMTP_HOST=os.environ.get('SMTP_HOST', ''), SMTP_PORT=int(os.environ.get('SMTP_PORT', '587')),
                       SMTP_USERNAME=os.environ.get('SMTP_USERNAME', ''), SMTP_PASSWORD=os.environ.get('SMTP_PASSWORD', ''),
                       SMTP_FROM_EMAIL=os.environ.get('SMTP_FROM_EMAIL', ''), SMTP_FROM_NAME=os.environ.get('SMTP_FROM_NAME', 'Свободно.'),
                       APP_BASE_URL=os.environ.get('APP_BASE_URL', 'http://127.0.0.1:5000'),
-                      PASSWORD_RESET_TTL_MINUTES=30, PASSWORD_RESET_LIMIT=30, PASSWORD_RESET_WINDOW_MINUTES=60)
-    if test_config:
-        app.config.update(test_config)
+                      PASSWORD_RESET_TTL_MINUTES=30, PASSWORD_RESET_LIMIT=3, PASSWORD_RESET_WINDOW_MINUTES=60,
+                      PASSWORD_RESET_IP_LIMIT=30, PASSWORD_RESET_GLOBAL_LIMIT=150)
+    Payments.configure(app)
+    configure(app, test_config)
+    demo_mode = app.config['DEMO_MODE']
     uploads = Path(app.config['UPLOAD_FOLDER'])
-    Path(app.instance_path).mkdir(exist_ok=True)
-    key = Path(app.instance_path) / 'session.key'
-    if not key.exists():
-        try:
-            with key.open('x') as f:
-                f.write(secrets.token_hex(32))
-            key.chmod(0o600)
-        except FileExistsError:
-            pass
-    app.secret_key = app.config.get('SECRET_KEY') or os.environ.get('APP_SECRET') or key.read_text()
 
     @contextmanager
     def db():
@@ -70,6 +66,30 @@ def create_app(test_config=None):
         finally:
             con.close()
 
+    payments = Payments(app, db, now)
+    delivery = RecoveryDelivery(app, db)
+    register_admin_command(app, db)
+
+    def session_user(connection):
+        user = account(connection, session.get('uid'))
+        sid = session.get('sid')
+        if (allowed_account(connection, user, demo_mode) and sid and session.get('version') == user['session_version']
+                and not connection.execute('SELECT 1 FROM revoked_sessions WHERE sid=?', (sid,)).fetchone()):
+            return user
+        for field in ('uid', 'version', 'sid'):
+            session.pop(field, None)
+        return None
+
+    def sign_in(user_id, version):
+        session.clear()
+        session.update(uid=user_id, version=version, sid=secrets.token_hex(24), csrf=secrets.token_hex(24))
+
+    def operation(connection, user, name):
+        connection.execute('BEGIN IMMEDIATE')
+        if not session_user(connection):
+            raise IdempotencyError('Войдите в личный кабинет', 401)
+        return Operation(connection, user['id'], name, request.headers.get('Idempotency-Key'), request.get_json())
+
     def fail(message, status=400):
         return jsonify(error=message), status
 
@@ -78,7 +98,7 @@ def create_app(test_config=None):
             @wraps(fn)
             def wrapped(*args, **kwargs):
                 with db() as c:
-                    user = account(c, session.get('uid'))
+                    user = session_user(c)
                 if not user:
                     return fail('Войдите в личный кабинет', 401)
                 if roles and user['role'] not in roles:
@@ -89,6 +109,8 @@ def create_app(test_config=None):
 
     @app.before_request
     def csrf():
+        if request.endpoint == 'webhook':
+            return None
         if request.method in ('POST', 'PATCH', 'DELETE'):
             if not session.get('csrf') or request.headers.get('X-CSRF-Token') != session['csrf']:
                 return fail('Обновите страницу и повторите действие', 403)
@@ -119,6 +141,7 @@ def create_app(test_config=None):
     def request_too_large(_):
         return fail('Размер запроса не должен превышать 1 МБ', 413)
 
+    @app.errorhandler(IdempotencyError)
     @app.errorhandler(ProfileError)
     def profile_error(error):
         return fail(str(error), error.status)
@@ -132,24 +155,30 @@ def create_app(test_config=None):
     def current():
         session.setdefault('csrf', secrets.token_hex(24))
         with db() as c:
-            user = c.execute('SELECT id,name,email,role,specialist_id,avatar FROM users WHERE id=? AND role!="deleted"', (session.get('uid'),)).fetchone()
-        return jsonify(user=dict(user) if user else None, csrf=session['csrf'])
+            user = session_user(c)
+        fields = ('id', 'name', 'email', 'role', 'specialist_id', 'avatar')
+        response = jsonify(user={field: user[field] for field in fields} if user else None,
+                           csrf=session['csrf'], demo_mode=demo_mode)
+        response.headers['Cache-Control'] = 'no-store'
+        return response
 
     @app.post('/api/login')
     def login():
         data = request.get_json()
         with db() as c:
             user = c.execute('SELECT * FROM users WHERE email=?', (str(data.get('email', '')).strip().lower(),)).fetchone()
-        if not user or not check_password_hash(user['password'], str(data.get('password', ''))):
+            permitted = allowed_account(c, user, demo_mode)
+        if not permitted or not check_password_hash(user['password'], str(data.get('password', ''))):
             return fail('Неверная почта или пароль', 401)
-        session.clear()
-        session.update(uid=user['id'], csrf=secrets.token_hex(24))
+        sign_in(user['id'], user['session_version'])
         return current()
 
     @app.post('/api/register')
     def register():
         d = request.get_json()
         name, email, password = (str(d.get(k, '')).strip() for k in ('name', 'email', 'password'))
+        if demo_email(email):
+            return fail('Этот почтовый домен зарезервирован для демонстрации')
         if not 2 <= len(name) <= 80 or '@' not in email or len(email) > 120 or not 8 <= len(password) <= 128:
             return fail('Укажите имя, корректную почту и пароль от 8 до 128 символов')
         try:
@@ -158,8 +187,7 @@ def create_app(test_config=None):
                                 (name, email.lower(), generate_password_hash(password), 'client')).lastrowid
         except sqlite3.IntegrityError:
             return fail('Эта почта уже зарегистрирована', 409)
-        session.clear()
-        session.update(uid=uid, csrf=secrets.token_hex(24))
+        sign_in(uid, 0)
         return current()
 
     @app.post('/api/password-reset/request')
@@ -168,36 +196,42 @@ def create_app(test_config=None):
         email = str(data.get('email', '')).strip().lower()
         if len(email) > 120 or not re.fullmatch(r'[^\s@]+@[^\s@]+\.[^\s@]+', email):
             return fail('Укажите корректный адрес электронной почты')
-        ip = request.remote_addr or 'unknown'
-        email_hash = hashlib.sha256(email.encode('utf-8')).hexdigest()
+        try:
+            address = ipaddress.ip_address(request.remote_addr or '')
+            if isinstance(address, ipaddress.IPv6Address) and address.ipv4_mapped:
+                address = address.ipv4_mapped
+            ip = str(ipaddress.ip_network(f'{address}/64', strict=False)) if address.version == 6 else str(address)
+        except ValueError:
+            ip = 'unknown'
+        email_hash = hashlib.sha256(email.encode()).hexdigest()
         current_time = now()
         cutoff = (current_time - timedelta(minutes=app.config['PASSWORD_RESET_WINDOW_MINUTES'])).isoformat()
+        response = jsonify(message='Если адрес зарегистрирован, инструкция будет отправлена на почту')
         with db() as c:
             c.execute('DELETE FROM password_reset_requests WHERE created_at < ?', (cutoff,))
-            count = c.execute('SELECT COUNT(*) FROM password_reset_requests WHERE ip_address=? OR email_hash=?', (ip, email_hash)).fetchone()[0]
-            if count >= app.config['PASSWORD_RESET_LIMIT']:
-                return jsonify(message='Если адрес зарегистрирован, инструкция будет отправлена на почту'), 200
-            c.execute('INSERT INTO password_reset_requests(ip_address,email_hash,created_at) VALUES(?,?,?)', (ip, email_hash, current_time.isoformat()))
-            user = c.execute('SELECT id,email,name FROM users WHERE email=?', (email,)).fetchone()
-            if user:
-                raw_token = secrets.token_urlsafe(32)
-                token_hash = hashlib.sha256(raw_token.encode('utf-8')).hexdigest()
-                expires = (current_time + timedelta(minutes=app.config['PASSWORD_RESET_TTL_MINUTES'])).isoformat()
-                c.execute('DELETE FROM password_reset_tokens WHERE user_id=?', (user['id'],))
-                c.execute('INSERT INTO password_reset_tokens(user_id,token_hash,expires_at,created_at) VALUES(?,?,?,?)', (user['id'], token_hash, expires, current_time.isoformat()))
-        if user:
-            link = app.config['APP_BASE_URL'].rstrip('/') + '/reset-password#token=' + raw_token
-            try:
-                sender = app.config.get('MAIL_SENDER') or send_recovery_email
-                sender(app.config, user['email'], user['name'], link)
-            except Exception as exc:
-                # Keep the response generic (avoid account enumeration), but make
-                # the cause visible in server logs without exposing addresses,
-                # reset tokens, SMTP responses or credentials.
-                app.logger.error('Password recovery email delivery failed (%s)', type(exc).__name__)
-                with db() as c:
-                    c.execute('DELETE FROM password_reset_tokens WHERE token_hash=?', (token_hash,))
-        return jsonify(message='Если адрес зарегистрирован, инструкция будет отправлена на почту'), 200
+            limits = (
+                ("WHERE email_hash=?", (email_hash,), 'PASSWORD_RESET_LIMIT'),
+                ("WHERE ip_address=?", (ip,), 'PASSWORD_RESET_IP_LIMIT'),
+                ("", (), 'PASSWORD_RESET_GLOBAL_LIMIT'),
+            )
+            for where, args, limit in limits:
+                count = c.execute(f'SELECT COUNT(*) FROM password_reset_requests {where}', args).fetchone()[0]
+                if count >= app.config[limit]:
+                    return response
+            c.execute('INSERT INTO password_reset_requests(ip_address,email_hash,created_at) VALUES(?,?,?)',
+                      (ip, email_hash, current_time.isoformat()))
+            c.execute('DELETE FROM password_reset_tokens WHERE expires_at<=?', (current_time.isoformat(),))
+            user = c.execute('SELECT * FROM users WHERE email=?', (email,)).fetchone()
+            if not allowed_account(c, user, demo_mode):
+                return response
+            raw_token = secrets.token_urlsafe(32)
+            token_hash = hashlib.sha256(raw_token.encode()).hexdigest()
+            expires = (current_time + timedelta(minutes=app.config['PASSWORD_RESET_TTL_MINUTES'])).isoformat()
+            c.execute('INSERT INTO password_reset_tokens(user_id,token_hash,expires_at,created_at) VALUES(?,?,?,?)',
+                      (user['id'], token_hash, expires, current_time.isoformat()))
+        link = app.config['APP_BASE_URL'].rstrip('/') + '/reset-password#token=' + raw_token
+        delivery.send(user['email'], user['name'], link, token_hash)
+        return response
 
     @app.post('/api/password-reset/confirm')
     def confirm_password_reset():
@@ -209,19 +243,37 @@ def create_app(test_config=None):
         if not 8 <= len(password) <= 128 or password != confirmation:
             return fail('Пароль должен содержать от 8 до 128 символов, а подтверждение должно совпадать')
         token_hash = hashlib.sha256(token.encode('utf-8')).hexdigest()
+        def reset_user(connection):
+            user = connection.execute("""SELECT u.* FROM password_reset_tokens t JOIN users u ON u.id=t.user_id
+                WHERE t.token_hash=? AND t.expires_at>?""", (token_hash, now().isoformat())).fetchone()
+            return user if allowed_account(connection, user, demo_mode) else None
+
+        invalid = 'Ссылка восстановления недействительна или устарела'
+        with db() as c:
+            if not reset_user(c):
+                return fail(invalid)
+        password_hash = generate_password_hash(password)
         with db() as c:
             c.execute('BEGIN IMMEDIATE')
-            row = c.execute('SELECT user_id FROM password_reset_tokens WHERE token_hash=? AND expires_at>?', (token_hash, now().isoformat())).fetchone()
-            if not row:
-                return fail('Ссылка восстановления недействительна или устарела', 400)
-            c.execute('UPDATE users SET password=? WHERE id=?', (generate_password_hash(password), row['user_id']))
-            c.execute('DELETE FROM password_reset_tokens WHERE user_id=?', (row['user_id'],))
+            user = reset_user(c)
+            if not user:
+                return fail(invalid)
+            c.execute('UPDATE users SET password=?,session_version=session_version+1 WHERE id=?',
+                      (password_hash, user['id']))
+            c.execute('DELETE FROM password_reset_tokens WHERE user_id=?', (user['id'],))
         session.clear()
         session['csrf'] = secrets.token_hex(24)
         return jsonify(ok=True, csrf=session['csrf'], message='Пароль успешно изменён. Теперь войдите с новым паролем')
 
     @app.post('/api/logout')
     def logout():
+        sid = session.get('sid')
+        if sid:
+            timestamp = int(time.time())
+            with db() as c:
+                c.execute('DELETE FROM revoked_sessions WHERE expires_at<=?', (timestamp,))
+                c.execute('INSERT OR IGNORE INTO revoked_sessions(sid,expires_at) VALUES(?,?)',
+                          (sid, timestamp + int(app.permanent_session_lifetime.total_seconds())))
         session.clear()
         return current()
 
@@ -236,7 +288,12 @@ def create_app(test_config=None):
     @auth(*CUSTOMER_ROLES)
     def update_profile(user):
         with db() as c:
-            update_details(c, user['id'], request.get_json())
+            data = request.get_json()
+            update_details(c, user['id'], data)
+            if data.get('new_password'):
+                version = account(c, user['id'])['session_version']
+        if data.get('new_password'):
+            sign_in(user['id'], version)
         return current()
 
     @app.post('/api/profile/avatar')
@@ -376,10 +433,14 @@ def create_app(test_config=None):
     def book(user):
         try:
             with db() as c:
-                ident = create_booking(c, user['id'], request.get_json(), now)
+                op = operation(c, user, 'booking')
+                result = op.previous()
+                if result is None:
+                    ident = create_booking(c, user['id'], request.get_json(), now)
+                    result = op.save({'id': ident})
         except BookingError as error:
             return fail(str(error), error.status)
-        return jsonify(id=ident), 201
+        return jsonify(result), 201
 
     @app.get('/api/notifications')
     @auth()
@@ -457,12 +518,19 @@ def create_app(test_config=None):
             where, params = '1=1', ()
         else:
             return fail('Недостаточно прав', 403)
+        if client_view or role == 'master':
+            payments.due(where, params, limit=1)
         with db() as c:
             application = latest_application(c, user['id']) if client_view else None
             bookings = c.execute(f'''SELECT b.*,s.starts_at,s.ends_at slot_ends_at,s.booking_mode,s.specialist_id,s.capacity,v.title service,v.mode,
+                pay.status payment_status,pay.refund_status,pay.shop_id payment_shop,pay.created_at payment_created,
+                pay.refund_started_at refund_started,pay.refund_id provider_refund_id,
                 CASE WHEN s.ends_at IS NOT NULL AND s.booking_mode!='day' THEN ROUND((julianday(s.ends_at)-julianday(s.starts_at))*1440) ELSE v.duration END duration,p.name specialist,p.photo,u.name client
                 FROM bookings b JOIN slots s ON s.id=b.slot_id JOIN services v ON v.id=s.service_id
-                JOIN specialists p ON p.id=s.specialist_id JOIN users u ON u.id=b.user_id WHERE {where} ORDER BY s.starts_at DESC''', params).fetchall()
+                JOIN specialists p ON p.id=s.specialist_id JOIN users u ON u.id=b.user_id
+                LEFT JOIN booking_payments pay ON pay.rowid=(
+                    SELECT rowid FROM booking_payments WHERE booking_id=b.id ORDER BY rowid DESC LIMIT 1)
+                WHERE {where} ORDER BY s.starts_at DESC''', params).fetchall()
             searches = c.execute('SELECT * FROM searches WHERE user_id=? ORDER BY id DESC LIMIT 30', (user['id'],)).fetchall()
             reviews = c.execute('SELECT r.*,p.name specialist,u.name author FROM reviews r JOIN specialists p ON p.id=r.specialist_id JOIN users u ON u.id=r.user_id ' + ('' if user['role'] == 'admin' else 'WHERE r.user_id=? ') + 'ORDER BY r.id DESC', () if user['role'] == 'admin' else (user['id'],)).fetchall()
             profile_groups = ([dict(row) for row in c.execute('''SELECT id,name FROM service_categories
@@ -478,7 +546,15 @@ def create_app(test_config=None):
                 }
         current_time = now()
         reviewed_ids = {r['booking_id'] for r in reviews}
-        rows = [{**dict(b), **booking_policy(b, user, current_time, b['id'] in reviewed_ids)} for b in bookings]
+        rows = []
+        payment_fields = ('payment_status', 'refund_status', 'payment_shop', 'payment_created', 'refund_started', 'provider_refund_id')
+        timestamp = int(time.time())
+        for booking in bookings:
+            row = {**dict(booking), **booking_policy(booking, user, current_time, booking['id'] in reviewed_ids)}
+            row['payment'] = payments.summary(row, user, timestamp)
+            for field in payment_fields:
+                del row[field]
+            rows.append(row)
         return jsonify(bookings=rows, pending=pending, searches=[dict(r) for r in searches], reviews=[dict(r) for r in reviews],
                        specialist_application=application, specialist_categories=profile_groups,
                        user={key: user[key] for key in ('id', 'name', 'email', 'role', 'specialist_id', 'avatar')},
@@ -636,15 +712,19 @@ def create_app(test_config=None):
     def add_service(user):
         try:
             with db() as c:
-                c.execute('BEGIN IMMEDIATE')
+                op = operation(c, user, 'service')
+                result = op.previous()
+                if result is not None:
+                    return jsonify(result), 201
                 fields = service_fields(c, request.get_json())
                 if not c.execute('SELECT 1 FROM specialists WHERE id=? AND deleted=0', (user['specialist_id'],)).fetchone():
                     return fail('Профиль специалиста не найден', 404)
                 ident = c.execute('''INSERT INTO services(specialist_id,title,price,duration,mode,category_id,moderation_status)
                     VALUES(?,?,?,?,?,?,'pending')''', (user['specialist_id'], *fields.values())).lastrowid
+                result = op.save(dict(ok=True, id=ident, moderation_status='pending'))
         except ModerationError as error:
             return fail(str(error), error.status)
-        return jsonify(ok=True, id=ident, moderation_status='pending'), 201
+        return jsonify(result), 201
 
     @app.post('/api/master/services/<int:ident>/<action>')
     @auth('master')
@@ -662,17 +742,24 @@ def create_app(test_config=None):
     @auth('master')
     def add_slot(user):
         d = request.get_json()
-        try:
-            starts = datetime.fromisoformat(d.get('starts_at', ''))
-            if starts.tzinfo is not None:
-                raise ValueError()
-        except (ValueError, TypeError):
-            return fail('Укажите корректные дату и время')
-        cap = d.get('capacity', 1)
-        if type(cap) is not int or not 1 <= cap <= 50 or starts <= now() or starts > now() + timedelta(days=365):
-            return fail('Дата должна быть в ближайшем году, количество мест — от 1 до 50')
         with db() as c:
-            c.execute('BEGIN IMMEDIATE')
+            op = operation(c, user, 'slot')
+            result = op.previous()
+            if result is not None:
+                return jsonify(result), 201
+            try:
+                starts = datetime.fromisoformat(d.get('starts_at', ''))
+                if starts.tzinfo is not None:
+                    raise ValueError()
+                starts = starts.replace(second=0, microsecond=0)
+            except (ValueError, TypeError):
+                return fail('Укажите корректные дату и время')
+            cap = d.get('capacity', 1)
+            current_time = now()
+            if type(cap) is not int or not 1 <= cap <= 50 or starts <= current_time or starts > current_time + timedelta(days=365):
+                return fail('Дата должна быть в ближайшем году, количество мест — от 1 до 50')
+            if type(d.get('service_id')) is not int or not 1 <= d['service_id'] < 2**63:
+                return fail('Услуга не найдена', 404)
             if schedule_for(c, user['specialist_id']) is not None:
                 return fail('Для ручных слотов переключите режим расписания', 409)
             service = c.execute('SELECT * FROM services WHERE id=? AND specialist_id=? AND active=1 AND deleted=0', (d.get('service_id'), user['specialist_id'])).fetchone()
@@ -690,8 +777,10 @@ def create_app(test_config=None):
                 return fail('В расписании специалиста обнаружена некорректная дата', 409)
             if any(starts < start + timedelta(minutes=duration) and end > start for start, duration in occupied):
                 return fail('Этот интервал пересекается с другим слотом', 409)
-            c.execute('INSERT INTO slots(specialist_id,service_id,starts_at,capacity) VALUES(?,?,?,?)', (user['specialist_id'], service['id'], starts.isoformat(timespec='minutes'), cap))
-        return jsonify(ok=True), 201
+            ident = c.execute('INSERT INTO slots(specialist_id,service_id,starts_at,capacity) VALUES(?,?,?,?)',
+                              (user['specialist_id'], service['id'], starts.isoformat(timespec='minutes'), cap)).lastrowid
+            result = op.save(dict(ok=True, id=ident))
+        return jsonify(result), 201
 
     @app.post('/api/master/slots/<int:ident>/close')
     @auth('master')
@@ -857,6 +946,7 @@ def create_app(test_config=None):
                 return fail('Объект не найден', 404)
         return jsonify(ok=True)
 
+    payments.register(auth)
     init_db(app, db)
     return app
 
@@ -864,7 +954,7 @@ def create_app(test_config=None):
 def init_db(app, db):
     from backend.database.seed_data import initialize_database
     with db() as connection:
-        initialize_database(connection, now())
+        initialize_database(connection, now(), app.config['DEMO_MODE'])
 
 
 if __name__ == '__main__':

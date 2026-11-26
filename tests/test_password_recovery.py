@@ -18,7 +18,7 @@ def app(tmp_path):
     sent.clear()
     return create_app({
         'TESTING': True,
-        'DATABASE': str(tmp_path / 'recovery.sqlite'),
+        'DEMO_MODE': True, 'DEMO_DATABASE': str(tmp_path / 'recovery.sqlite'),
         'SECRET_KEY': 'test-secret',
         'APP_BASE_URL': 'https://example.test',
         'MAIL_SENDER': lambda config, email, name, url: sent.append((email, name, url)),
@@ -129,17 +129,18 @@ def test_smtp_from_header_round_trip(monkeypatch):
 
 
 def test_rate_limit(app):
-    assert app.config['PASSWORD_RESET_LIMIT'] == 30
+    assert app.config['PASSWORD_RESET_LIMIT'] == 3
+    assert app.config['PASSWORD_RESET_IP_LIMIT'] == 30
     assert app.config['PASSWORD_RESET_WINDOW_MINUTES'] == 60
     assert app.config['PASSWORD_RESET_TTL_MINUTES'] == 30
     client = app.test_client()
     payload = {'email': 'client@svobodno.demo'}
-    for _ in range(30):
+    for _ in range(3):
         allowed = post(client, '/password-reset/request', payload)
         assert allowed.status_code == 200
-    assert len(sent) == 30
+    assert len(sent) == 3
 
     blocked = post(client, '/password-reset/request', payload)
     assert blocked.status_code == 200
     assert blocked.json == allowed.json
-    assert len(sent) == 30
+    assert len(sent) == 3

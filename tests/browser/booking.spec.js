@@ -157,3 +157,27 @@ test('catalog network failure has a working retry instead of an endless spinner'
   await page.getByRole('button',{name:'Повторить загрузку'}).click();
   await expect(page.locator('.specialist-card')).toHaveCount(6);
 });
+
+test('recovers the booking when the server response is lost', async ({page}) => {
+  await login(page);
+  await openBooking(page);
+  await chooseTime(page);
+  await page.getByRole('button', {name:'Продолжить'}).click();
+  await page.getByLabel('Адрес выезда').fill('Киров, Ленина 10');
+  const keys = [];
+  let bookedId;
+  await page.route('**/api/bookings', async route => {
+    keys.push(route.request().headers()['idempotency-key']);
+    if (keys.length > 1) return route.continue();
+    const response = await route.fetch();
+    expect(response.status()).toBe(201);
+    bookedId = (await response.json()).id;
+    await route.abort();
+  });
+  await page.getByRole('button', {name:'Подтвердить запись'}).click();
+  await expect(page.getByLabel('Адрес выезда')).toHaveValue('Киров, Ленина 10');
+  await page.getByRole('button', {name:'Проверить запись'}).click();
+  await expect(page.locator('#booking-list [data-booking-id]')).toHaveCount(2);
+  await expect(page.locator(`[data-booking-id="${bookedId}"]`)).toHaveCount(1);
+  expect(keys).toEqual([expect.any(String), keys[0]]);
+});

@@ -15,9 +15,9 @@ let dashboardRefreshTimer;
 let dashboardRequest = 0;
 let catalogRequest = 0;
 const chatLauncher = $('#chat-launch');
-async function api(path, data, method = data === undefined ? 'GET' : 'POST') {
+async function api(path, data, method = data === undefined ? 'GET' : 'POST', extraHeaders = {}) {
   const multipart = data instanceof FormData;
-  const headers = {'X-CSRF-Token': state.csrf};
+  const headers = {'X-CSRF-Token': state.csrf, ...extraHeaders};
   if (!multipart) headers['Content-Type'] = 'application/json';
   const body = multipart || data === undefined ? data : JSON.stringify(data);
   const controller = new AbortController();
@@ -33,6 +33,34 @@ async function api(path, data, method = data === undefined ? 'GET' : 'POST') {
     throw error;
   } finally { clearTimeout(timeout); }
 }
+const pendingOperations = new Map();
+
+function uncertainOperation(error) {
+ return !error.status || [408, 429].includes(error.status) || error.status >= 500;
+}
+
+function operationIdentity(path, data) {
+ const entries = Object.entries(data).sort(([a], [b]) => a.localeCompare(b));
+ return JSON.stringify([state.demoMode, state.user.id, path, entries]);
+}
+
+async function submitOperation(path, data) {
+ const identity = operationIdentity(path, data);
+ let key = pendingOperations.get(identity);
+ if (!key) {
+  key = Array.from(crypto.getRandomValues(new Uint8Array(16)), byte => byte.toString(16).padStart(2, '0')).join('');
+  pendingOperations.set(identity, key);
+ }
+ try {
+  const result = await api(path, data, 'POST', {'Idempotency-Key': key});
+  pendingOperations.delete(identity);
+  return result;
+ } catch (error) {
+  if (!uncertainOperation(error) && ![401, 403].includes(error.status)) pendingOperations.delete(identity);
+  throw error;
+ }
+}
+
 function toast(message) {$('#toast').textContent = message; $('#toast').classList.add('show'); clearTimeout(toast.timer); toast.timer = setTimeout(() => $('#toast').classList.remove('show'), 4500);}
 function modal(html) {$('#modal-content').innerHTML = html; if (!$('#modal').open) $('#modal').showModal();}
 function closeModal() {
@@ -67,7 +95,7 @@ function endSession({csrf}) {
 async function refreshCatalog() {const data = await api('/catalog'); state.specialists = data.specialists; state.categories = data.categories;}
 function card({specialist: s, service, price, category}) {
  const profileAttributes = `data-profile="${s.id}" data-preferred-service="${service.id}"`;
- return `<article class="specialist-card"><button class="photo-button" ${profileAttributes} aria-label="Профиль: ${esc(s.name)}"><img src="${esc(s.photo)}" alt="Демонстрационное фото специалиста ${esc(s.name)}" loading="lazy">${category ? `<span class="photo-label">${esc(category)}</span>` : ''}<span class="photo-arrow">↗</span></button><div class="card-body"><div class="rating">★ <b>${s.rating ?? 'Новый'}</b><span>${s.reviews.length ? reviewCount(s.reviews.length) : 'Пока без отзывов'}</span></div><button class="name-link" ${profileAttributes}>${esc(s.name)}</button><p class="profession">${esc(s.profession)} <span>· ${s.experience} лет опыта</span></p><p class="location">⌖ ${esc(s.location)}</p><div class="tags">${s.skills.split(',').slice(0,2).map(x => `<span>${esc(x)}</span>`).join('')}</div><div class="card-bottom"><div><small>Стоимость услуг</small><strong>от ${money(price)}</strong></div><button class="button pale" ${profileAttributes}>Выбрать время <span>↗</span></button></div></div></article>`;
+ return `<article class="specialist-card"><button class="photo-button" ${profileAttributes} aria-label="Профиль: ${esc(s.name)}"><img src="${esc(s.photo)}" alt="Фото специалиста ${esc(s.name)}" loading="lazy">${category ? `<span class="photo-label">${esc(category)}</span>` : ''}<span class="photo-arrow">↗</span></button><div class="card-body"><div class="rating">★ <b>${s.rating ?? 'Новый'}</b><span>${s.reviews.length ? reviewCount(s.reviews.length) : 'Пока без отзывов'}</span></div><button class="name-link" ${profileAttributes}>${esc(s.name)}</button><p class="profession">${esc(s.profession)} <span>· ${s.experience} лет опыта</span></p><p class="location">⌖ ${esc(s.location)}</p><div class="tags">${s.skills.split(',').slice(0,2).map(x => `<span>${esc(x)}</span>`).join('')}</div><div class="card-bottom"><div><small>Стоимость услуг</small><strong>от ${money(price)}</strong></div><button class="button pale" ${profileAttributes}>Выбрать время <span>↗</span></button></div></div></article>`;
 }
 function catalog() {
  $('#app').innerHTML = `<section class="hero"><div class="hero-text"><span class="eyebrow"><i></i> ХОРОШИЕ СПЕЦИАЛИСТЫ РЯДОМ</span><h1>Нужный человек.<br><em>В удобное время.</em></h1><p>От ремонта крана до нового увлечения — найдите своего<br class="desktop"> специалиста и запишитесь без лишних звонков.</p><form id="search-form" class="search-box"><span>⌕</span><input id="search-input" placeholder="Какая помощь вам нужна?" aria-label="Поиск специалистов" value="${esc(state.query)}"><button class="button">Найти <span>↗</span></button></form><div class="popular">Например: <button data-query="Сантехник">сантехник</button><button data-query="Стрижка">стрижка</button><button data-query="Английский">английский</button></div><div class="hero-proof"><div class="mini-faces">${state.specialists.slice(0,3).map(s=>`<img src="${s.photo}" alt="">`).join('')}</div><div><strong>Меньше поисков. Больше жизни.</strong><span>Свободные слоты и понятные цены</span></div></div></div><div class="hero-art"><img src="/static/photos/hero.jpg" alt="Стилист работает над причёской клиента в салоне"><span class="art-caption">Хорошая работа<br>начинается с человека.</span><div class="float-card"><span class="check-round">✓</span><div><strong>Всё складывается</strong><span>Выбирайте время — остальное за нами</span></div><span>✧</span></div><div class="art-top">СВОБОДНО ДЛЯ ВАШИХ ПЛАНОВ <span>↗</span></div></div></section>
@@ -135,7 +163,7 @@ function resetPasswordPage() {
  form.onsubmit=async e=>{e.preventDefault();const button=$('button',form);button.disabled=true;try{const values=Object.fromEntries(new FormData(form));const result=await api('/password-reset/confirm',{token,...values});state.user=null;state.csrf=result.csrf;updateAccount();history.replaceState(null,'','/');void route();modal('<h2>Пароль изменён</h2><p class="muted">Теперь войдите с новым паролем.</p><button id="reset-login" class="button full">Войти</button>');$('#reset-login').onclick=()=>login();}catch(err){$('.form-error',form).textContent=err.message;}finally{button.disabled=false;}};
 }
 function login(after=null,register=false) {
- modal(`<span class="eyebrow">ВАШЕ ВРЕМЯ — В ВАШИХ РУКАХ</span><h2>${register?'Создать аккаунт':'Рады видеть вас'}</h2><p class="muted">${register?'Сохраните свои записи, отзывы и историю поиска.':'Войдите, чтобы управлять записями и расписанием.'}</p><form id="login-form">${register?'<label class="field">Ваше имя<input name="name" required minlength="2" maxlength="80" autocomplete="name"></label>':''}<label class="field">Электронная почта<input name="email" type="email" autocomplete="email" required></label><label class="field">Пароль<input name="password" type="password" autocomplete="${register?'new-password':'current-password'}" minlength="8" maxlength="128" required></label><p class="form-error" role="alert"></p><button class="button full">${register?'Зарегистрироваться':'Войти'} →</button></form>${!register?'<button id="forgot-password" class="text-button auth-switch">Забыли пароль?</button>':''}<button id="auth-switch" class="text-button auth-switch">${register?'Уже есть аккаунт? Войти':'Нет аккаунта? Зарегистрироваться'}</button>${!register?`<div class="demo-access"><span class="eyebrow">ПОПРОБУЙТЕ ДЕМО</span><p>Вымышленные данные, настоящие сценарии</p><div>${[['client','Клиент'],['master','Мастер'],['teacher','Преподаватель'],['admin','Администратор']].map(([k,v])=>`<button data-demo="${k}" class="button outline">${v}</button>`).join('')}</div><small>Общие демо-аккаунты. Не вводите личные данные.</small></div>`:''}`);
+ modal(`<span class="eyebrow">ВАШЕ ВРЕМЯ — В ВАШИХ РУКАХ</span><h2>${register?'Создать аккаунт':'Рады видеть вас'}</h2><p class="muted">${register?'Сохраните свои записи, отзывы и историю поиска.':'Войдите, чтобы управлять записями и расписанием.'}</p><form id="login-form">${register?'<label class="field">Ваше имя<input name="name" required minlength="2" maxlength="80" autocomplete="name"></label>':''}<label class="field">Электронная почта<input name="email" type="email" autocomplete="email" required></label><label class="field">Пароль<input name="password" type="password" autocomplete="${register?'new-password':'current-password'}" minlength="8" maxlength="128" required></label><p class="form-error" role="alert"></p><button class="button full">${register?'Зарегистрироваться':'Войти'} →</button></form>${!register?'<button id="forgot-password" class="text-button auth-switch">Забыли пароль?</button>':''}<button id="auth-switch" class="text-button auth-switch">${register?'Уже есть аккаунт? Войти':'Нет аккаунта? Зарегистрироваться'}</button>${!register && state.demoMode?`<div class="demo-access"><span class="eyebrow">ПОПРОБУЙТЕ ДЕМО</span><p>Вымышленные данные, настоящие сценарии</p><div>${[['client','Клиент'],['master','Мастер'],['teacher','Преподаватель'],['admin','Администратор']].map(([k,v])=>`<button data-demo="${k}" class="button outline">${v}</button>`).join('')}</div><small>Общие демо-аккаунты. Не вводите личные данные.</small></div>`:''}`);
  const form=$('#login-form');
  async function submit(data){const button=$('button',form);button.disabled=true;try{const res=await api(register?'/register':'/login',data);state.user=res.user;state.csrf=res.csrf;updateAccount();closeModal(); if(after)await after();else{location.hash='dashboard';await dashboard();}}catch(e){$('.form-error',form).textContent=e.message;}finally{button.disabled=false;}}
  form.onsubmit=e=>{e.preventDefault();submit(Object.fromEntries(new FormData(form)));};
@@ -267,8 +295,23 @@ function bindNotifications(user) {
  load();
 }
 
+const paymentLabels = {
+ unpaid:'Не оплачено', creating:'Проверяем создание платежа', pending:'Ожидает оплаты',
+ waiting_for_capture:'Ожидает подтверждения', succeeded:'Оплачено', canceled:'Платёж отменён',
+ failed:'Платёж не создан', refund_pending:'Ожидается возврат', refund_succeeded:'Возврат выполнен',
+ refund_canceled:'Возврат отменён. Обратитесь к администратору', needs_review:'Требуется проверка администратором'
+};
+
 function bookingActions(booking) {
  const buttons = [];
+ if (booking.payment) {
+  const {status, can_pay} = booking.payment;
+  buttons.push(`<span class="badge">Тестовая оплата · ${esc(paymentLabels[status])}</span>`);
+  if (can_pay) {
+   const label = {creating:'Проверить платёж', pending:'Продолжить оплату', canceled:'Повторить оплату', failed:'Повторить оплату'};
+   buttons.push(`<button data-pay="${booking.id}" class="button pale">${label[status] || 'Оплатить'}</button>`);
+  }
+ }
  if (booking.actions.cancel) buttons.push(`<button data-cancel="${booking.id}" class="text-button danger">Отменить запись</button>`);
  if (booking.actions.complete) buttons.push(`<button class="button pale" data-complete="${booking.id}">Завершить встречу</button>`);
  if (booking.actions.review) buttons.push(`<button data-review="${booking.id}" class="button pale">Оставить отзыв</button>`);
@@ -470,6 +513,27 @@ async function renderDashboard(background) {
   const draw=()=>{
    const rows=data.bookings.filter(b=>$('#booking-status').value==='all'||b.status===$('#booking-status').value);
    $('#booking-list').innerHTML=rows.length?rows.map(b=>`<article class="booking-row" data-booking-id="${b.id}"><img src="${esc(b.photo)}" alt=""><div class="booking-info"><span class="badge ${b.status} ${b.phase}">${esc(b.status_label)}</span><h3>${esc(b.service)}</h3><p>${esc(b.specialist)}${!isClient?' · Клиент: '+esc(b.client):''}</p><p><b>${date(b.starts_at)}${b.booking_mode==='day'?'':` · ${time(b.starts_at)}–${b.starts_at.slice(0,10)===b.ends_at.slice(0,10)?'':date(b.ends_at)+' · '}${time(b.ends_at)}`}</b> · ${b.duration} мин · ${b.mode} · ${b.quantity} мест(о)</p>${b.address?`<p>⌖ ${esc(b.address)}</p>`:''}${b.note?`<p class="muted">${esc(b.note)}</p>`:''}${b.cancel_reason ? `<p>Причина отмены: ${esc(b.cancel_reason)}</p>` : ''}</div><div class="booking-actions">${bookingActions(b)}</div></article>`).join(''):'<div class="empty"><span>▦</span><h3>Здесь пока нет записей</h3><p>Выберите специалиста и удобное время в каталоге.</p><a class="button" href="#catalog">Найти специалиста ↗</a></div>';
+   $$('[data-pay]', $('#booking-list')).forEach(button => button.onclick = async () => {
+    if (button.disabled) return;
+    button.disabled = true;
+    try {
+     const payment = await submitOperation(`/bookings/${button.dataset.pay}/payment`, {});
+     if (payment.confirmation_url) {
+      location.assign(payment.confirmation_url);
+      return;
+     }
+     toast(paymentLabels[payment.status] || 'Проверяем состояние платежа');
+     await dashboard();
+    } catch (error) {
+     toast(error.message);
+    } finally {
+     button.disabled = false;
+    }
+   });
+   if (state.newBookingId) {
+    $(`[data-booking-id="${state.newBookingId}"]`)?.scrollIntoView({block:'center'});
+    state.newBookingId = null;
+   }
    $$('[data-cancel]').forEach(button => button.onclick = () => {
     managementConfirmation('Отменить запись?', 'Место освободится, клиент получит уведомление.',
      isMaster, async reason => {
@@ -505,7 +569,25 @@ async function renderDashboard(background) {
    $('.section-title', root).classList.toggle('hidden', Boolean(m.schedule));
    const form=$('#slot-form');
    const capacity=()=>{const group=form.elements.service_id.selectedOptions[0]?.dataset.mode==='Группа';form.elements.capacity.max=group?'50':'1';if(!group)form.elements.capacity.value=1;};form.elements.service_id.onchange=capacity;capacity();
-   form.onsubmit=async e=>{e.preventDefault();const d=Object.fromEntries(new FormData(form));d.service_id=Number(d.service_id);d.capacity=Number(d.capacity);try{await api('/master/slots',d);await dashboard();toast('Слот добавлен');}catch(e){$('.form-error',form).textContent=e.message;}};
+   form.onsubmit = async event => {
+    event.preventDefault();
+    const button = $('button', form);
+    if (button.disabled) return;
+    const data = Object.fromEntries(new FormData(form));
+    data.service_id = Number(data.service_id);
+    data.capacity = Number(data.capacity);
+    button.disabled = true;
+    try {
+     await submitOperation('/master/slots', data);
+     form.reset();
+     toast('Слот добавлен');
+     dashboard().catch(error => toast(error.message));
+    } catch (error) {
+     $('.form-error', form).textContent = error.message;
+    } finally {
+     button.disabled = false;
+    }
+   };
    $$('[data-close-slot]').forEach(b=>b.onclick=async()=>{try{await api('/master/slots/'+b.dataset.closeSlot+'/close',{});await dashboard();toast('Слот закрыт');}catch(e){toast(e.message);}});
   }else{
    renderManagedServices(root, m.services, m.categories);
@@ -624,4 +706,7 @@ $('#modal').onclick=e=>{if(e.target===$('#modal')){const r=$('#modal').getBoundi
 $('#account').onclick=()=>{if(state.user){location.hash='dashboard';dashboard().catch(e=>toast(e.message));}else login();};
 async function route(){const id=++catalogRequest;try{if(location.hash==='#dashboard'){await dashboard();}else{clearTimeout(dashboardRefreshTimer);stopNotificationPolling();await refreshCatalog();if(id!==catalogRequest)return;catalog();scheduleDashboardRefresh();if(location.hash==='#how')$('#how-section').scrollIntoView({behavior:'smooth'});}$$('[data-nav]').forEach(a=>a.classList.toggle('active',a.getAttribute('href')===(location.hash||'#catalog')));}catch(e){$('#chat').before(chatLauncher);$('#app').innerHTML=`<div class="empty" role="alert"><h2>Не удалось загрузить страницу</h2><p>${esc(e.message)}</p><button id="retry-page" class="button">Повторить загрузку</button></div>`;$('#retry-page').onclick=route;}}
 window.addEventListener('hashchange',route);
-(async()=>{try{const s=await api('/session');state.user=s.user;state.csrf=s.csrf;updateAccount();if(location.pathname==='/reset-password'){resetPasswordPage();}await route();}catch(e){$('#app').innerHTML=`<div class="empty"><h2>Не удалось загрузить приложение</h2><p>${esc(e.message)}</p><button class="button" onclick="location.reload()">Повторить</button></div>`;}})();
+(async()=>{try{const s=await api('/session');state.user=s.user;state.csrf=s.csrf;state.demoMode=s.demo_mode;
+ if (state.demoMode) $('#site-mode').textContent = 'Демонстрационный проект · 2026. Примеры специалистов и отзывов вымышлены. Фото: Unsplash и Barber demo.';
+ if (new URLSearchParams(location.search).has('payment_return')) dashboardMode='client';
+ updateAccount();if(location.pathname==='/reset-password'){resetPasswordPage();}await route();}catch(e){$('#app').innerHTML=`<div class="empty"><h2>Не удалось загрузить приложение</h2><p>${esc(e.message)}</p><button class="button" onclick="location.reload()">Повторить</button></div>`;}})();
