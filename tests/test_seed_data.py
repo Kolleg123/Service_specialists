@@ -56,7 +56,7 @@ def test_legacy_partial_database_with_one_specialist_is_repaired(tmp_path):
     assert len(first['users']) == 6
     assert len(first['services']) == 11
     assert len(first['slots']) == 160
-    assert any(r[2] == 'own@example.test' and r[3] == 'my-hash' for r in first['users'])
+    assert any(r[3] == 'own@example.test' and r[4] == 'my-hash' for r in first['users'])
     initialize(path)
     assert snapshot(path) == first
 
