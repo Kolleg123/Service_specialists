@@ -63,7 +63,7 @@ test('last-slot race returns current alternatives and never submits stale select
   await page.getByLabel('Адрес выезда').fill('Киров, Ленина 10');
   const competitor = await browser.newContext();
   const session = await (await competitor.request.get('http://127.0.0.1:5051/api/session')).json();
-  const auth = await (await competitor.request.post('http://127.0.0.1:5051/api/login', {headers:{'X-CSRF-Token':session.csrf},data:{email:'ivan@svobodno.demo',password:'Demo2026!'}})).json();
+  const auth = await (await competitor.request.post('http://127.0.0.1:5051/api/login', {headers:{'X-CSRF-Token':session.csrf},data:{username:'ivan',password:'Demo2026!'}})).json();
   let competingBooking;
   await page.route('**/api/bookings', async route => {
     const r = await competitor.request.post('http://127.0.0.1:5051/api/bookings', {headers:{'X-CSRF-Token':auth.csrf},data:{slot_id:slotId,address:'Киров, Ленина 10'}});
@@ -167,7 +167,7 @@ test('selected slot and booking form stay available after signing in', async ({p
   const summary = await page.locator('.confirmation-summary').innerText();
   await page.locator('#book-form textarea[name="note"]').fill('Проверка сохранения комментария');
   await page.getByRole('button', {name:'Войти и записаться'}).click();
-  await page.getByLabel('Электронная почта').fill('client@svobodno.demo');
+  await page.getByLabel('Логин').fill('client');
   await page.getByLabel('Пароль').fill('Demo2026!');
   await page.getByRole('button', {name:'Войти →'}).click();
   await expect(page.locator('#booking-flow')).toBeVisible();
