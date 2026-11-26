@@ -510,7 +510,7 @@ def create_app(test_config=None):
         rows = [{**dict(b), **booking_policy(b, user, current_time, b['id'] in reviewed_ids)} for b in bookings]
         return jsonify(bookings=rows, pending=pending, searches=[dict(r) for r in searches], reviews=[dict(r) for r in reviews],
                        specialist_application=application, specialist_categories=profile_groups,
-                       user={key: user[key] for key in ('id', 'name', 'email', 'role', 'specialist_id', 'avatar')},
+                       user={key: user[key] for key in ('id', 'name', 'username', 'email', 'role', 'specialist_id', 'avatar')},
                        server_now=current_time.isoformat(timespec='seconds'))
 
     def apply_booking_transition(user, ident, action):
