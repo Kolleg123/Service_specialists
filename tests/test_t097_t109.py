@@ -45,7 +45,7 @@ def test_reminders_are_idempotent_and_cancelled_booking_has_no_reminder(app):
     c = client(app)
     slot = c.get('/api/slots/1').json['slots'][0]
     with sqlite3.connect(app.config['DATABASE']) as con:
-        starts = (now() + timedelta(minutes=30)).isoformat(timespec='minutes')
+        starts = (now() + timedelta(minutes=90)).isoformat(timespec='minutes')
         con.execute('UPDATE slots SET starts_at=? WHERE id=?', (starts, slot['id']))
     booking = post(c, '/bookings', {'slot_id': slot['id'], 'address': 'Киров, Ленина 10'})
     assert booking.status_code == 201
