@@ -66,7 +66,7 @@ test('last-slot race returns current alternatives and never submits stale select
   const auth = await (await competitor.request.post('http://127.0.0.1:5051/api/login', {headers:{'X-CSRF-Token':session.csrf},data:{username:'ivan',password:'Demo2026!'}})).json();
   let competingBooking;
   await page.route('**/api/bookings', async route => {
-    const r = await competitor.request.post('http://127.0.0.1:5051/api/bookings', {headers:{'X-CSRF-Token':auth.csrf},data:{slot_id:slotId,address:'Киров, Ленина 10'}});
+    const r = await competitor.request.post('http://127.0.0.1:5051/api/bookings', {headers:{'X-CSRF-Token':auth.csrf,'Idempotency-Key':'competing-booking'},data:{slot_id:slotId,address:'Киров, Ленина 10'}});
     expect(r.status()).toBe(201);
     competingBooking = (await r.json()).id;
     await route.continue();

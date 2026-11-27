@@ -251,7 +251,9 @@ class BookingFlow {
       <div class="date-grid" role="group" aria-label="Доступные даты">${pageDays.map(d => `<button data-day="${d}" aria-pressed="${this.day === d}"><b>${new Date(d + 'T12:00:00').getDate()}</b><span>${new Date(d + 'T12:00:00').toLocaleDateString('ru-RU', {month:'short', weekday:'short'})}</span></button>`).join('')}</div>
       <p class="date-range">Расписание опубликовано до ${date(days.at(-1))}.</p>
       <label class="field date-jump">Перейти к дате<input id="jump-date" type="date" min="${days[0]}" max="${days.at(-1)}" value="${this.day || ''}"></label>
-      ${this.dateOnly ? '' : `<div id="times" class="time-grid" role="group" aria-label="Свободное время">${this.day ? this.slots.filter(s => s.starts_at.startsWith(this.day)).map(s => `<button class="slot ${this.slot && this.slotKey(this.slot) === this.slotKey(s) ? 'selected' : ''}" data-slot="${this.slotKey(s)}" aria-pressed="${this.slot && this.slotKey(this.slot) === this.slotKey(s)}" ${s.remaining < 1 ? 'disabled' : ''}>${time(s.starts_at)}<small>${s.remaining > 0 ? s.capacity > 1 ? `${s.remaining} из ${s.capacity} мест` : `${s.duration} мин` : 'Мест нет'}</small></button>`).join('') : '<p class="muted">Сначала выберите дату выше.</p>'}</div>`}
+      ${this.dateOnly ? (this.slot ? `<section class="booking-availability" tabindex="-1"><h4>Дата доступна</h4>
+        ${this.slot.remaining !== undefined ? `<p>Свободных мест: ${this.slot.remaining}</p>` : ''}</section>` : '') :
+        `<section class="booking-availability" tabindex="-1">${this.day ? '<h4>Доступное время</h4>' : ''}<div id="times"  class="time-grid" role="group" aria-label="Свободное время">${this.day ? this.slots.filter(s => s.starts_at.startsWith(this.day)).map(s => `<button class="slot ${this.slot && this.slotKey(this.slot) === this.slotKey(s) ? 'selected' : ''}" data-slot="${this.slotKey(s)}" aria-pressed="${this.slot && this.slotKey(this.slot) === this.slotKey(s)}" ${s.remaining < 1 ? 'disabled' : ''}>${time(s.starts_at)}<small>${s.remaining > 0 ? s.capacity > 1 ? `${s.remaining} из ${s.capacity} мест` : `${s.duration} мин` : 'Мест нет'}</small></button>`).join('') : '<p class="muted">Сначала выберите дату выше.</p>'}</div></section>`}
       <div id="booking-details">${this.slot ? `<div class="service-summary"><strong>${date(this.slot.starts_at)}${this.dateOnly ? '' : ' · ' + time(this.slot.starts_at)}</strong><span>${this.slot.duration} мин · ${esc(this.slot.service)}</span><b>${money(this.slot.price)}</b></div><button id="to-confirmation" class="button full">Продолжить →</button>` : ''}</div>`);
     const turnPage = offset => {
       this.page += offset;
@@ -266,7 +268,8 @@ class BookingFlow {
       this.day = b.dataset.day;
       this.slot = this.dateOnly ? this.slots.find(s => s.date === this.day) : null;
       this.render();
-      $(`[data-day="${this.day}"]`)?.focus();
+      $(`[data-day="${this.day}"]`)?.focus({preventScroll:true});
+      this.revealAvailability();
     });
     $('#jump-date').onchange = e => {
       const index = days.indexOf(e.target.value);
@@ -275,7 +278,8 @@ class BookingFlow {
       if (index >= 0) this.page = Math.floor(index / pageSize);
       this.notice = index < 0 ? 'На эту дату нет свободного времени. Выберите одну из доступных дат.' : '';
       this.render();
-      $('#jump-date').focus();
+      $('#jump-date').focus({preventScroll:true});
+      if (this.day) this.revealAvailability();
     };
     $$('[data-slot]').forEach(b => b.onclick = () => {
       this.slot = {...this.slots.find(s => String(this.slotKey(s)) === b.dataset.slot)};
@@ -312,6 +316,17 @@ class BookingFlow {
       $('#total-price').textContent = money(s.price * this.fields.quantity);
     };
     form.onsubmit = e => { e.preventDefault(); this.submit(); };
+  }
+
+  revealAvailability() {
+    const section = $('.booking-availability');
+    const dialog = $('#modal');
+    if (!section) return;
+    const bounds = section.getBoundingClientRect();
+    const frame = dialog.getBoundingClientRect();
+    if (bounds.top < frame.top + 55 || bounds.top + Math.min(bounds.height, 130) > frame.bottom) {
+      dialog.scrollTop += bounds.top - frame.top - 65;
+    }
   }
 
   async recover(message) {
@@ -366,8 +381,19 @@ class BookingFlow {
       duration: snapshot.duration, price: snapshot.price, mode: snapshot.mode,
       service_address: snapshot.service_address, ...this.fields,
       address: snapshot.mode === 'Выезд' ? this.fields.address : ''};
-    const checking = this.pendingConfirmation || pendingOperations.has(operationIdentity('/bookings', payload));
+    if (this.submitting) return;
     this.submitting = true;
+    let identity, saved;
+    try {
+      identity = await bookingIdentity(payload);
+      saved = sessionStorage.getItem(identity);
+    } catch {
+      this.submitting = false;
+      $('.form-error', $('#book-form') ?? document)?.replaceChildren('Не удалось сохранить ключ записи. Откройте сайт через HTTPS и проверьте доступ к хранилищу браузера.');
+      return;
+    }
+    if (!this.alive) { this.submitting = false; return; }
+    const checking = this.pendingConfirmation || saved !== null;
     $('#booking-service').disabled = true;
     $$('.booking-steps [data-step]').forEach(button => button.disabled = true);
     for (const field of $('#book-form').querySelectorAll('input, textarea')) field.readOnly = true;
@@ -387,7 +413,7 @@ class BookingFlow {
         }
       }
       sent = true;
-      booking = await submitOperation('/bookings', payload);
+      booking = await submitOperation('/bookings', payload, identity);
     } catch (error) {
       if (!this.alive) return;
       this.submitting = false;

@@ -1,4 +1,4 @@
-function openNotificationDetails({message, event, created_at, target}) {
+function openNotificationDetails({message, subject, event, created_at, target}) {
  const item = target?.item;
  const titles = {
   specialist_approved:'Заявка специалиста одобрена', specialist_rejected:'Заявка специалиста отклонена',
@@ -10,7 +10,7 @@ function openNotificationDetails({message, event, created_at, target}) {
   payment_canceled:'Платёж отменён', payment_failed:'Ошибка оплаты',
   refund_pending:'Ожидается возврат', refund_succeeded:'Возврат выполнен', refund_canceled:'Возврат отменён'
  };
- const title = titles[event] || 'Уведомление';
+ const title = subject || titles[event] || 'Уведомление';
  let copy = message;
  let fields = [];
  let content = '';
@@ -42,7 +42,7 @@ function openNotificationDetails({message, event, created_at, target}) {
   content = supportDetails(item);
   copy = '';
   label = 'Открыть обращение';
- } else if (event !== 'specialist_revoked') {
+ } else if (!['specialist_revoked','admin_message'].includes(event)) {
   content = '<p class="muted">Связанный объект больше недоступен.</p>';
  }
  const status = event.endsWith('_approved') ? ['Одобрено','approved'] :
@@ -52,6 +52,7 @@ function openNotificationDetails({message, event, created_at, target}) {
   <h2>${esc(title)}</h2>
   <div class="notice-meta"><time datetime="${esc(created_at)}">${date(created_at)} · ${time(created_at)} (Киров)</time>
    ${status ? `<span class="badge ${status[1]}">${status[0]}</span>` : ''}</div>
+  ${event === 'admin_message' ? '<p class="muted">Сообщение администрации</p>' : ''}
   ${copy ? `<p class="notice-copy">${esc(copy)}</p>` : ''}
   ${fields.some(([,value]) => value) ? `<dl class="detail-grid">${fields.filter(([,value]) => value)
    .map(([key,value]) => `<dt>${esc(key)}</dt><dd>${esc(value)}</dd>`).join('')}</dl>` : ''}
@@ -263,8 +264,11 @@ function renderAdminUsers(root, users) {
        <dt>Описание</dt><dd>${esc(user.specialist.bio || '—')}</dd></dl>
       <h3>Услуги</h3>${user.specialist.services.length ? `<ul class="admin-user-services">${user.specialist.services
        .map(service => `<li>${esc(service.title)}${service.active ? '' : ' · Скрыта'}</li>`).join('')}</ul>` :
-       '<p class="muted">Услуг пока нет.</p>'}
-      ${user.role === 'master' ? `<button class="button outline danger" data-revoke="${user.id}">Снять права специалиста</button>` : ''}` : ''}
+       '<p class="muted">Услуг пока нет.</p>'}` : ''}
+     <div class="dialog-actions admin-user-actions">
+      <button class="button outline" data-user-action="message">Написать пользователю</button>
+      ${user.id !== state.user.id ? '<button class="button outline" data-user-action="role">Изменить роль</button><button class="button outline danger" data-user-action="delete">Удалить аккаунт</button>' : ''}
+     </div>
     </div>
    </details>`).join('') : '<p class="empty">По выбранным условиям пользователей нет.</p>';
  };
@@ -277,17 +281,13 @@ function renderAdminUsers(root, users) {
   else open.delete(id);
  }, true);
  results.onclick = event => {
-  const button = event.target.closest('[data-revoke]');
-  if (!button) return;
-  const user = users.find(user => user.id === Number(button.dataset.revoke));
-  managementConfirmation('Снять права специалиста?',
-   `${user.name} останется клиентом. Услуги исчезнут из каталога, а история записей сохранится.`,
-   true, async reason => {
-    await api(`/admin/users/${user.id}/revoke-specialist`, {reason});
-    await refreshCatalog();
-    return 'Права специалиста сняты';
-   }, {back:'Оставить права',confirm:'Снять права',reasonLabel:'Причина снятия прав',
-    confirmClass:'danger-solid',lockWhilePending:true});
+  const action = event.target.closest('[data-user-action]');
+  if (action) {
+   const user = users.find(user => user.id === Number(action.closest('[data-account-id]').dataset.accountId));
+   adminUserAction(user, action.dataset.userAction, roles);
+   return;
+  }
+
  };
  draw();
  if (focusAdminUser) {
@@ -295,4 +295,76 @@ function renderAdminUsers(root, users) {
   summary?.focus();
   focusAdminUser = null;
  }
+}
+
+function adminUserAction(user, action, roles) {
+ const base = `/admin/users/${user.id}`;
+ if (action === 'delete') {
+  managementConfirmation('Удалить аккаунт?',
+   `${user.name} потеряет доступ к аккаунту. Записи и платежи останутся в истории, личные данные будут обезличены.`,
+   false, async () => {
+    await api(base, undefined, 'DELETE');
+    return 'Аккаунт удалён';
+   }, {back:'Отмена',confirm:'Удалить аккаунт',confirmClass:'danger-solid',lockWhilePending:true});
+  return;
+ }
+ const messaging = action === 'message';
+ const choices = user.role === 'client' ? ['master', 'admin'] : user.role === 'master' ? ['client', 'admin'] : ['client'];
+ modal(`<h2>${messaging ? 'Написать пользователю' : 'Изменить роль'}</h2>
+  <p>${esc(user.name)} · ${roles[user.role]}</p><form id="admin-user-form">
+   ${messaging ? `<label class="field">Тема<input name="subject" required maxlength="120"></label>
+    <label class="field">Текст сообщения<textarea name="body" required maxlength="2000"></textarea></label>` :
+    `<label class="field">Новая роль<select name="role" required><option value="">Выберите роль</option>
+     ${choices.map(role => `<option value="${role}">${roles[role]}</option>`).join('')}</select></label>
+    <p data-role-help class="muted"></p><button type="button" class="text-button" data-open-applications hidden>Открыть заявки специалистов</button>
+    ${user.role === 'master' ? '<label class="field">Причина снятия прав<textarea name="reason" required maxlength="500"></textarea></label>' : ''}
+    <label class="role-confirm" hidden><input type="checkbox" name="confirm"> Подтверждаю выдачу прав администратора</label>`}
+   <div class="dialog-actions"><button type="button" class="button outline" data-back>Отмена</button>
+    <button type="submit" class="button">${messaging ? 'Отправить' : 'Сохранить роль'}</button></div>
+   <p class="form-error" role="alert"></p>
+  </form>`);
+ const form = $('#admin-user-form');
+ $('[data-back]', form).onclick = closeModal;
+ if (!messaging) $('[data-open-applications]', form).onclick = () => {
+  closeModal();
+  specialistApplicationFilter = 'pending';
+  dashboardTab = 'specialist-applications';
+  dashboard().catch(error => toast(error.message, 'error'));
+ };
+ if (!messaging) form.elements.role.onchange = () => {
+  const role = form.elements.role.value;
+  form.elements.confirm.closest('label').hidden = role !== 'admin';
+  form.elements.confirm.required = role === 'admin';
+  $('[data-open-applications]', form).hidden = role !== 'master';
+  $('[data-role-help]', form).textContent = role === 'admin'
+   ? 'Пользователь получит доступ к управлению аккаунтами, ролями, заявками и журналом действий.'
+   : role === 'master' ? 'Права выдаются через одобрение текущей заявки пользователя. Если заявки нет, попросите его подать её.' : '';
+ };
+ form.onsubmit = async event => {
+  event.preventDefault();
+  const button = $('button[type=submit]', form);
+  if (button.disabled) return;
+  const data = Object.fromEntries(new FormData(form));
+  if (!messaging) data.confirm = form.elements.confirm.checked;
+  const error = $('.form-error', form);
+  error.textContent = '';
+  form.setAttribute('data-pending-deletion', '');
+  button.disabled = true;
+  try {
+   if (messaging) await submitOperation(base + '/message', data);
+   else await api(base + '/role', data);
+   form.removeAttribute('data-pending-deletion');
+   closeModal();
+   if (!messaging) {
+    focusAdminUser = user.id;
+    dashboard().catch(error => toast(error.message, 'error'));
+   }
+   toast(messaging ? 'Сообщение отправлено' : 'Роль изменена', 'success');
+  } catch (failure) {
+   error.textContent = failure.message;
+  } finally {
+   form.removeAttribute('data-pending-deletion');
+   button.disabled = false;
+  }
+ };
 }

@@ -35,7 +35,7 @@ from backend.database.service_categories import active_category_id, category_gro
 from backend.support import STATUSES, create_support, support_items, update_support
 from backend.moderation.services import (ModerationError, PUBLIC_DETAILS, PUBLIC_SERVICE, decide_service, manage_service,
                                 service_details, service_fields)
-from backend.moderation.specialists import decide_application, latest_application, submit_application
+from backend.moderation.specialists import decide_application, latest_application, submit_application, profile_values, PROFILE_FIELDS
 
 load_dotenv(Path(__file__).resolve().with_name('.env'))
 
@@ -171,6 +171,7 @@ def create_app(test_config=None):
         return fail('Размер запроса не должен превышать 1 МБ', 413)
 
     @app.errorhandler(IdempotencyError)
+    @app.errorhandler(ModerationError)
     @app.errorhandler(ProfileError)
     def profile_error(error):
         return fail(str(error), error.status)
@@ -495,16 +496,34 @@ def create_app(test_config=None):
     @app.post('/api/bookings')
     @auth(*CUSTOMER_ROLES)
     def book(user):
+        if request.headers.get('Idempotency-Key') is None:
+            return fail('Для записи требуется Idempotency-Key')
+        data = request.get_json()
+        if not isinstance(data, dict):
+            return fail('Некорректные данные записи')
         try:
             with db() as c:
                 op = operation(c, user, 'booking')
                 result = op.previous()
                 if result is None:
-                    ident = create_booking(c, user['id'], request.get_json(), now)
+                    ident = create_booking(c, user['id'], data, now)
                     result = op.save({'id': ident})
         except BookingError as error:
             return fail(str(error), error.status)
         return jsonify(result), 201
+
+    @app.get('/api/bookings/attempt')
+    @auth(*CUSTOMER_ROLES)
+    def booking_attempt(user):
+        key = request.headers.get('Idempotency-Key', '')
+        if not re.fullmatch(r'[A-Za-z0-9._:-]{1,128}', key):
+            return fail('Некорректный ключ операции')
+        with db() as c:
+            row = c.execute("SELECT response FROM idempotent_operations WHERE user_id=? AND operation='booking' AND operation_key=?",
+                            (user['id'], key)).fetchone()
+        response = jsonify(booking=json.loads(row['response']) if row else None)
+        response.headers['Cache-Control'] = 'no-store'
+        return response
 
     @app.get('/api/notifications')
     @auth()
@@ -513,7 +532,9 @@ def create_app(test_config=None):
             rows = c.execute(
                 'SELECT id,booking_id,service_id,specialist_application_id,support_request_id,event,message,created_at,is_read FROM notifications WHERE user_id=? ORDER BY id DESC',
                 (user['id'],)).fetchall()
-        return jsonify(notifications=[{**dict(row), 'is_read': bool(row['is_read'])} for row in rows])
+        return jsonify(notifications=[{**dict(row), 'is_read': bool(row['is_read']),
+                                      'message': json.loads(row['message'])['subject'] if row['event'] == 'admin_message' else row['message']}
+                                     for row in rows])
 
     @app.post('/api/notifications/<int:ident>/read')
     @auth()
@@ -539,7 +560,12 @@ def create_app(test_config=None):
                 return fail('Уведомление не найдено', 404)
             c.execute('UPDATE notifications SET is_read=1 WHERE id=?', (ident,))
             target = notification_target(c, notice, user)
-        return jsonify(message=notice['message'], event=notice['event'], created_at=notice['created_at'], target=target)
+        message = notice['message']
+        subject = None
+        if notice['event'] == 'admin_message':
+            content = json.loads(message)
+            subject, message = content['subject'], content['body']
+        return jsonify(message=message, subject=subject, event=notice['event'], created_at=notice['created_at'], target=target)
 
     def notification_target(c, notice, user):
         if notice['support_request_id'] is not None:
@@ -985,6 +1011,107 @@ def create_app(test_config=None):
             return fail(str(error), error.status)
         return jsonify(id=ident), 201 if action == 'create' else 200
 
+    @app.route('/api/master/profile', methods=['GET', 'PATCH'])
+    @auth('master')
+    def professional_profile(user):
+        with db() as c:
+            if request.method == 'PATCH':
+                c.execute('BEGIN IMMEDIATE')
+                current_user = session_user(c)
+                if not current_user or current_user['role'] != 'master':
+                    return fail('Недостаточно прав', 403)
+                data = request.get_json()
+                if not isinstance(data, dict) or set(data) - (set(PROFILE_FIELDS) - {'name', 'category_group_id'}):
+                    return fail('Некорректные поля профиля специалиста')
+                values = profile_values(c, {**data, 'name': current_user['name']})
+                values.pop('name')
+                assignments = ','.join(key + '=?' for key in values)
+                changed = c.execute(f'UPDATE specialists SET {assignments} WHERE id=? AND deleted=0',
+                                    (*values.values(), current_user['specialist_id'])).rowcount
+                if not changed:
+                    return fail('Профиль специалиста не найден', 404)
+            profile = c.execute('SELECT * FROM specialists WHERE id=? AND deleted=0', (user['specialist_id'],)).fetchone()
+            if not profile:
+                return fail('Профиль специалиста не найден', 404)
+            groups = c.execute('SELECT id,name FROM service_categories WHERE parent_id IS NULL AND archived=0').fetchall()
+        return jsonify(profile={key: profile[key] for key in PROFILE_FIELDS}, categories=[dict(group) for group in groups])
+
+    @app.route('/api/admin/users/<int:ident>', methods=['DELETE'])
+    @app.post('/api/admin/users/<int:ident>/role')
+    @app.post('/api/admin/users/<int:ident>/message')
+    @auth('admin')
+    def manage_user(user, ident):
+        return change_user(user, ident)
+
+    def change_user(user, ident, revoke=False):
+        if not 1 <= ident < 2**63:
+            return fail('Пользователь не найден', 404)
+        remove = request.method == 'DELETE'
+        message = request.path.endswith('/message')
+        if ident == user['id'] and not message:
+            return fail('Действие над собственным аккаунтом недоступно', 403)
+        data = {} if remove else request.get_json()
+        if not isinstance(data, dict):
+            return fail('Некорректные данные')
+        previous_photos = ()
+        with db() as c:
+            c.execute('BEGIN IMMEDIATE')
+            actor = session_user(c)
+            if not actor or actor['role'] != 'admin':
+                return fail('Недостаточно прав', 403)
+            target = account(c, ident)
+            if not target:
+                return fail('Пользователь не найден', 404)
+            old_role = target['role']
+            if remove:
+                previous_photos = retire_account(c, ident, now(), admin=True, locked=True)
+                audit(c, user['id'], 'account_deleted', 'user', ident, {'role': old_role})
+            elif message:
+                subject, body = data.get('subject'), data.get('body')
+                if not isinstance(subject, str) or not 1 <= len(subject.strip()) <= 120 or not isinstance(body, str) or not 1 <= len(body.strip()) <= 2000:
+                    return fail('Укажите тему до 120 символов и текст до 2000 символов')
+                key = request.headers.get('Idempotency-Key')
+                if key is None:
+                    return fail('Для сообщения требуется ключ операции')
+                op = Operation(c, user['id'], f'admin-message:{ident}', key, data)
+                if op.previous() is not None:
+                    return jsonify(ok=True)
+                c.execute('INSERT INTO notifications(user_id,event,message,created_at) VALUES(?,?,?,?)',
+                          (ident, 'admin_message', json.dumps({'subject': subject.strip(), 'body': body.strip()}, ensure_ascii=False),
+                           now().isoformat(timespec='seconds')))
+                audit(c, user['id'], 'admin_message', 'user', ident)
+                op.save({'ok': True})
+            else:
+                if revoke and old_role != 'master':
+                    return fail('У пользователя нет прав специалиста', 409)
+                role = 'client' if revoke else data.get('role')
+                if role not in ('client', 'admin', 'master') or role == old_role:
+                    return fail('Выберите другую доступную роль', 409)
+                if role == 'admin' and data.get('confirm') is not True:
+                    return fail('Подтвердите выдачу прав администратора')
+                if role == 'master':
+                    if old_role != 'client':
+                        return fail('Сначала переведите аккаунт в роль клиента', 409)
+                    application = latest_application(c, ident)
+                    if not application or application['status'] != 'pending':
+                        return fail('Нужна новая заявка пользователя на рассмотрении', 409)
+                    decide_application(c, application['id'], {'status': 'approved'}, now, locked=True)
+                else:
+                    if role == 'admin' and c.execute("SELECT 1 FROM bookings WHERE user_id=? AND status='confirmed'", (ident,)).fetchone():
+                        return fail('Сначала завершите или отмените незакрытые записи клиента', 409)
+                    if old_role == 'master':
+                        reason = data.get('reason')
+                        if not isinstance(reason, str) or not 1 <= len(reason.strip()) <= 500:
+                            return fail('Укажите причину снятия прав (до 500 символов)')
+                        previous_photos = (retire_specialist(c, target['specialist_id']),)
+                        c.execute('INSERT INTO notifications(user_id,event,message,created_at) VALUES(?,?,?,?)',
+                                  (ident, 'specialist_revoked', 'Причина: ' + reason.strip(), now().isoformat(timespec='seconds')))
+                    c.execute('UPDATE users SET role=? WHERE id=?', (role, ident))
+                audit(c, user['id'], 'specialist_rights_revoked' if revoke else 'role_changed', 'user', ident, {'role': old_role}, {'role': role},
+                      data['reason'].strip() if old_role == 'master' else None)
+        cleanup_avatars(previous_photos)
+        return jsonify(ok=True)
+
     @app.get('/api/admin/users')
     @auth('admin')
     def admin_users(user):
@@ -1013,27 +1140,7 @@ def create_app(test_config=None):
     @app.post('/api/admin/users/<int:ident>/revoke-specialist')
     @auth('admin')
     def revoke_specialist(user, ident):
-        data = request.get_json()
-        reason = data.get('reason') if isinstance(data, dict) else None
-        if not isinstance(reason, str) or not 1 <= len(reason.strip()) <= 500:
-            return fail('Укажите причину снятия прав (до 500 символов)')
-        reason = reason.strip()
-        if not 1 <= ident < 2**63:
-            return fail('Пользователь не найден', 404)
-        with db() as c:
-            c.execute('BEGIN IMMEDIATE')
-            target = account(c, ident)
-            if not target:
-                return fail('Пользователь не найден', 404)
-            if target['role'] != 'master' or target['specialist_id'] is None:
-                return fail('У пользователя нет прав специалиста', 409)
-            photo = retire_specialist(c, target['specialist_id'])
-            audit(c, user['id'], 'specialist_rights_revoked', 'user', ident,
-                  {'role': 'master'}, {'role': 'client'}, reason)
-            c.execute('INSERT INTO notifications(user_id,event,message,created_at) VALUES(?,?,?,?)',
-                      (ident, 'specialist_revoked', 'Причина: ' + reason, now().isoformat(timespec='seconds')))
-        cleanup_avatars((photo,))
-        return jsonify(ok=True)
+        return change_user(user, ident, revoke=True)
 
     @app.get('/api/admin')
     @auth('admin')

@@ -229,7 +229,7 @@ def test_admin_revokes_specialist_with_reason_and_retains_history(app):
     assert mutate(master, 'POST', path, json=reason).status_code == 403
     assert mutate(admin, 'POST', path, json={'reason': '   '}).status_code == 400
     admin_id = admin.get('/api/session').json['user']['id']
-    assert mutate(admin, 'POST', f'/admin/users/{admin_id}/revoke-specialist', json=reason).status_code == 409
+    assert mutate(admin, 'POST', f'/admin/users/{admin_id}/revoke-specialist', json=reason).status_code == 403
     with sqlite3.connect(app.config['DATABASE']) as connection:
         booking_id = connection.execute('''SELECT b.id FROM bookings b JOIN slots s ON s.id=b.slot_id
             WHERE s.specialist_id=? LIMIT 1''', (user['specialist_id'],)).fetchone()[0]
@@ -259,3 +259,44 @@ def test_admin_profile_allows_password_only(app):
     assert mutate(admin, 'PATCH', '/profile', json=data).json['user'] == original
     assert post(admin, '/logout', {}).status_code == 200
     assert post(admin, '/login', {'username': original['username'], 'password': data['new_password']}).status_code == 200
+
+
+def test_admin_manage_accounts_and_private_message(app):
+    admin, master, customer = client(app, 'admin'), client(app, 'master'), client(app, 'client')
+    admin_id = admin.get('/api/session').json['user']['id']
+    customer_id = customer.get('/api/session').json['user']['id']
+    path = f'/admin/users/{customer_id}'
+    assert mutate(admin, 'DELETE', f'/admin/users/{admin_id}').status_code == 403
+    assert post(admin, f'/admin/users/{admin_id}/role', {'role': 'client'}).status_code == 403
+    assert mutate(master, 'DELETE', path).status_code == 403
+    csrf = admin.get('/api/session').json['csrf']
+    for _ in range(2):
+        response = admin.post('/api' + path + '/message', json={'subject': 'Правила', 'body': 'Первая строка\nВторая строка'},
+                              headers={'X-CSRF-Token': csrf, 'Idempotency-Key': 'admin-message-1'})
+        assert response.status_code == 200
+    notices = [notice for notice in customer.get('/api/notifications').json['notifications'] if notice['event'] == 'admin_message']
+    assert len(notices) == 1
+    assert post(master, f"/notifications/{notices[0]['id']}/open", {}).status_code == 404
+    assert post(customer, f"/notifications/{notices[0]['id']}/open", {}).json['message'] == 'Первая строка\nВторая строка'
+    assert post(admin, path + '/role', {'role': 'admin'}).status_code == 400
+    assert post(admin, path + '/role', {'role': 'admin', 'confirm': True}).status_code == 200
+    assert customer.get('/api/admin/users').status_code == 200
+    assert post(admin, path + '/role', {'role': 'client'}).status_code == 200
+    assert customer.get('/api/admin/users').status_code == 403
+    booking_id = make_booking(customer, 1)
+    assert mutate(admin, 'DELETE', path).status_code == 409
+    assert post(customer, f'/bookings/{booking_id}/cancel', {}).status_code == 200
+    assert mutate(admin, 'DELETE', path).status_code == 200
+    assert customer.get('/api/session').json['user'] is None
+    assert any(row['id'] == booking_id for row in admin.get('/api/dashboard').json['bookings'])
+
+
+def test_professional_profile_can_update_only_owned_fields(app):
+    master, customer = client(app, 'master'), client(app, 'client')
+    current = master.get('/api/master/profile').json['profile']
+    data = {field: current[field] for field in ('profession', 'experience', 'education', 'skills', 'bio', 'location')}
+    data.update(profession='Мастер сантехнических работ', category=current['category_group_id'])
+    assert mutate(customer, 'PATCH', '/master/profile', json=data).status_code == 403
+    assert mutate(master, 'PATCH', '/master/profile', json={**data, 'id': 2}).status_code == 400
+    assert mutate(master, 'PATCH', '/master/profile', json=data).status_code == 200
+    assert catalog_profile(customer)['profession'] == data['profession']

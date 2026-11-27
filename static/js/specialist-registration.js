@@ -1,3 +1,10 @@
+function specialistTextField([key, label, maximum], draft) {
+  const value = esc(draft[key]);
+  const constraints = `name="${key}" required minlength="2" maxlength="${maximum}"`;
+  const control = maximum >= 500 ? `<textarea ${constraints}>${value}</textarea>` : `<input ${constraints} value="${value}">`;
+  return `<label class="field">${label}${control}</label>`;
+}
+
 const applicationTextFields = [
  ['name', 'Имя', 80],
  ['profession', 'Профессия', 100],
@@ -15,18 +22,12 @@ function renderSpecialistApplication(root, application, user, categories) {
  if (!canApply) return;
 
  const draft = application ?? {name: user.name};
- const textField = ([key, label, maximum]) => {
-  const value = esc(draft[key]);
-  const constraints = `name="${key}" required minlength="2" maxlength="${maximum}"`;
-  const control = maximum >= 500 ? `<textarea ${constraints}>${value}</textarea>` : `<input ${constraints} value="${value}">`;
-  return `<label class="field">${label}${control}</label>`;
- };
  root.insertAdjacentHTML('beforeend', `<form class="panel form-grid">
-  ${applicationTextFields.slice(0, 2).map(textField).join('')}
+  ${applicationTextFields.slice(0, 2).map(field => specialistTextField(field, draft)).join('')}
   <label class="field">Категория<select id="specialist-profile-group" name="category" required></select>
    <span class="form-error profile-group-unavailable" role="status"></span></label>
   <label class="field">Опыт работы, полных лет<input name="experience" type="number" min="0" max="80" required value="${esc(draft.experience)}"></label>
-  ${applicationTextFields.slice(2).map(textField).join('')}
+  ${applicationTextFields.slice(2).map(field => specialistTextField(field, draft)).join('')}
   <button class="button">${application ? 'Подать повторную заявку' : 'Отправить заявку'}</button>
   <p class="form-error" role="alert"></p>
  </form>`);
@@ -137,4 +138,49 @@ function renderSpecialistApplications(root, applications) {
    buttons.forEach(button => button.disabled = false);
   }
  });
+}
+
+function renderProfessionalProfile(root, {profile, categories}) {
+ root.innerHTML = `<h2>Профиль специалиста</h2><p class="muted">Изменения появятся в каталоге после сохранения.</p>
+  <form id="professional-profile-form" class="panel form-grid professional-profile">
+   ${applicationTextFields.slice(1).map(field => specialistTextField(field, profile)).join('')}
+   <label class="field">Категория<select name="category" required>
+    <option value="">Выберите категорию</option>${categoryOptions(categories)}</select></label>
+   <label class="field">Опыт работы, полных лет<input name="experience" type="number" min="0" max="80" required value="${esc(profile.experience)}"></label>
+   <section class="professional-preview" aria-label="Предпросмотр профиля"><h3>Предпросмотр</h3><div></div></section>
+   <button type="submit" class="button">Сохранить профиль</button>
+   <p id="professional-profile-status" role="status" class="muted"></p><p class="form-error" role="alert"></p>
+  </form>`;
+ const form = $('#professional-profile-form', root);
+ form.elements.category.value = profile.category_group_id || '';
+ const render = () => {
+  const values = Object.fromEntries(new FormData(form));
+  const category = categories.find(item => item.id === values.category)?.name;
+  $('.professional-preview > div', form).innerHTML = `<strong>${esc(profile.name)}</strong>
+   <p>${esc(values.profession)} · ${esc(category)} · Стаж: ${esc(values.experience)} лет</p>
+   <p>${esc(values.location)}</p><p>${esc(values.bio)}</p>
+   <p>${esc(values.education)}</p><p>${esc(values.skills)}</p>`;
+ };
+ form.addEventListener('input', render);
+ render();
+ form.onsubmit = async event => {
+  event.preventDefault();
+  const button = $('button[type=submit]', form);
+  if (button.disabled) return;
+  const data = Object.fromEntries(new FormData(form));
+  data.experience = Number(data.experience);
+  const error = $('.form-error', form);
+  const status = $('#professional-profile-status', form);
+  error.textContent = status.textContent = '';
+  button.disabled = true;
+  try {
+   await api('/master/profile', data, 'PATCH');
+   status.textContent = 'Профиль сохранён.';
+   form.removeAttribute('data-dirty');
+  } catch (failure) {
+   error.textContent = failure.message;
+  } finally {
+   button.disabled = false;
+  }
+ };
 }

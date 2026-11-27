@@ -1,3 +1,4 @@
+const {randomUUID} = require('node:crypto');
 const {test, expect} = require('@playwright/test');
 
 async function login(page, role) {
@@ -9,7 +10,7 @@ async function login(page, role) {
 
 async function post(page, path, data) {
   const {csrf} = await (await page.request.get('/api/session')).json();
-  return page.request.post(path, {headers: {'X-CSRF-Token': csrf}, data});
+  return page.request.post(path, {headers: {'X-CSRF-Token': csrf, 'Idempotency-Key': randomUUID()}, data});
 }
 
 for (const {width, specialist, service, title, travel} of [

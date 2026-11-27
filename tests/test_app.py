@@ -1,3 +1,4 @@
+from uuid import uuid4
 from concurrent.futures import ThreadPoolExecutor
 from datetime import timedelta
 import sqlite3
@@ -21,7 +22,10 @@ def client(app, role='client'):
 
 def post(c, url, data):
     token = c.get('/api/session').json['csrf']
-    return c.post('/api' + url, json=data, headers={'X-CSRF-Token': token})
+    headers = {'X-CSRF-Token': token}
+    if url == '/bookings':
+        headers['Idempotency-Key'] = uuid4().hex
+    return c.post('/api' + url, json=data, headers=headers)
 
 
 def test_catalog_and_consultation(app):

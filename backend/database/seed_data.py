@@ -138,7 +138,7 @@ CREATE TABLE notifications(
             AND support_request_id IS NOT NULL AND event IN ('support_created','support_resolved'))
         OR
         (payment_id IS NULL AND booking_id IS NULL AND service_id IS NULL AND specialist_application_id IS NULL
-            AND support_request_id IS NULL AND event='specialist_revoked')
+            AND support_request_id IS NULL AND event IN ('specialist_revoked','admin_message'))
     ),
     UNIQUE(user_id,payment_id,event),
     UNIQUE(user_id,specialist_application_id),
@@ -182,7 +182,7 @@ def migrate_notifications(connection):
     columns = {row['name'] for row in connection.execute('PRAGMA table_info(notifications)')}
     schema = connection.execute("SELECT sql FROM sqlite_master WHERE name='notifications'").fetchone()
     if columns and ('support_request_id' not in columns or 'specialist_application_id' not in columns or
-                    'payment_id' not in columns or 'specialist_revoked' not in schema['sql'] or
+                    'payment_id' not in columns or 'admin_message' not in schema['sql'] or
                     'UNIQUE(user_id,service_id)' in schema['sql']):
         connection.execute('ALTER TABLE notifications RENAME TO previous_notifications')
         connection.execute(NOTIFICATIONS_TABLE)
@@ -335,6 +335,13 @@ def initialize_database(connection, current_time, demo_mode):
     if 'ends_at' not in slot_columns:
         connection.execute('ALTER TABLE slots ADD COLUMN ends_at TEXT')
     migrate_service_moderation(connection)
+    duplicates = connection.execute('''SELECT user_id,slot_id,group_concat(id) ids FROM bookings
+        WHERE status='confirmed' GROUP BY user_id,slot_id HAVING count(*)>1 LIMIT 10''').fetchall()
+    if duplicates:
+        conflicts = ', '.join(f"user={row['user_id']} slot={row['slot_id']} bookings={row['ids']}" for row in duplicates)
+        raise ValueError('Найдены дубли активных записей. Сверьте историю и платежи до миграции: ' + conflicts)
+    connection.execute('''CREATE UNIQUE INDEX IF NOT EXISTS booking_active_user_slot
+        ON bookings(user_id,slot_id) WHERE status='confirmed' ''')
     migrate_booking_details(connection)
     initialize_support(connection)
     connection.execute(PAYMENT_SCHEMA)

@@ -44,21 +44,84 @@ function operationIdentity(path, data) {
  return JSON.stringify([state.demoMode, state.user.id, path, entries]);
 }
 
-async function submitOperation(path, data) {
- const identity = operationIdentity(path, data);
- let key = pendingOperations.get(identity);
+function bookingStoragePrefix() {
+ return `svobodno:booking:${state.demoMode}:${state.user.id}:`;
+}
+
+async function bookingIdentity(data) {
+ const digest = await crypto.subtle.digest('SHA-256',
+  new TextEncoder().encode(operationIdentity('/bookings', data)));
+ return bookingStoragePrefix() + operationKey(new Uint8Array(digest));
+}
+
+function operationKey(bytes = crypto.getRandomValues(new Uint8Array(16))) {
+ return Array.from(bytes, byte => byte.toString(16).padStart(2, '0')).join('');
+}
+
+function bookingAttempts() {
+ const prefix = bookingStoragePrefix();
+ try { return Object.keys(sessionStorage).filter(key => key.startsWith(prefix)); }
+ catch { return []; }
+}
+
+async function submitOperation(path, data, identity = operationIdentity(path, data)) {
+ const storage = path === '/bookings' ? sessionStorage : pendingOperations;
+ const get = storage instanceof Map ? storage.get.bind(storage) : storage.getItem.bind(storage);
+ const set = storage instanceof Map ? storage.set.bind(storage) : storage.setItem.bind(storage);
+ const drop = storage instanceof Map ? storage.delete.bind(storage) : storage.removeItem.bind(storage);
+ let key = get(identity);
  if (!key) {
-  key = Array.from(crypto.getRandomValues(new Uint8Array(16)), byte => byte.toString(16).padStart(2, '0')).join('');
-  pendingOperations.set(identity, key);
+  key = operationKey();
+  set(identity, key);
  }
  try {
   const result = await api(path, data, 'POST', {'Idempotency-Key': key});
-  pendingOperations.delete(identity);
+  drop(identity);
   return result;
  } catch (error) {
-  if (!uncertainOperation(error) && ![401, 403].includes(error.status)) pendingOperations.delete(identity);
+  if (!uncertainOperation(error) && ![401, 403].includes(error.status)) drop(identity);
   throw error;
  }
+}
+
+function showBookingRecovery(root) {
+ const attempts = bookingAttempts();
+ if (!attempts.length) return;
+ root.insertAdjacentHTML('beforeend', `<div class="panel booking-recovery">
+  <button type="button" class="button outline">Проверить отправленную запись</button>
+  <p role="status">Браузер сохранил ключ незавершённой попытки.</p></div>`);
+ const box = $('.booking-recovery', root);
+ const button = $('button', box);
+ button.onclick = async () => {
+  button.disabled = true;
+  try {
+   let confirmed;
+   for (const identity of attempts) {
+    const key = sessionStorage.getItem(identity);
+    if (!key) continue;
+    const {booking} = await api('/bookings/attempt', undefined, 'GET', {'Idempotency-Key':key});
+    if (booking) {
+     sessionStorage.removeItem(identity);
+     confirmed = booking;
+    }
+   }
+   if (confirmed) {
+    state.newBookingId = confirmed.id;
+    dashboardMode = 'client';
+    dashboardTab = 'bookings';
+    dashboardStatusFilter = 'all';
+    if (location.hash === '#dashboard') await dashboard();
+    else location.hash = 'dashboard';
+    toast(`Запись №${confirmed.id} подтверждена`, 'success');
+   } else {
+    $('p', box).textContent = 'Подтверждения пока нет. Если время доступно, повторите запись с теми же данными.';
+   }
+  } catch (error) {
+   $('p', box).textContent = error.message;
+  } finally {
+   button.disabled = false;
+  }
+ };
 }
 
 function toast(message, type) {
@@ -147,6 +210,7 @@ function catalog() {
   $('#catalog-section').scrollIntoView();
  };
  $('#catalog-section').insertBefore(chatLauncher,$('.filter-bar'));
+ if (['client','master'].includes(state.user?.role)) showBookingRecovery($('.hero-text'));
  drawCards();
 }
 function drawCards() {
@@ -451,7 +515,7 @@ async function renderDashboard(background) {
   schedule:'/master', services:'/master', people:'/admin',
   'specialist-applications':'/admin/specialist-applications',
   'service-applications':'/admin/service-applications?status=' + serviceApplicationFilter,
-  support:'/support', categories:'/admin/categories', audit:'/admin/audit', users:'/admin/users'
+  'professional-profile':'/master/profile', support:'/support', categories:'/admin/categories', audit:'/admin/audit', users:'/admin/users'
  }[tab];
  const [data, section] = await Promise.all([
   api(mode==='client' ? '/dashboard?mode=client' : '/dashboard'),
@@ -512,7 +576,7 @@ async function renderDashboard(background) {
  const isClient=user.role==='client' || (hasSpecialistProfile && mode==='client');
  const isMaster=hasSpecialistProfile && !isClient;
  if (hasSpecialistProfile) dashboardMode=mode;
- const tabs=isClient?[['bookings','Мои записи'],['searches','История поиска'],['reviews','Мои отзывы']]:isMaster?[['bookings','Записи клиентов'],['schedule','Моё расписание'],['services','Мои услуги']]:[['bookings','Все записи'],['moderation','Модерация отзывов'],['service-applications','Заявки на услуги'],['specialist-applications','Заявки специалистов'],['people','Специалисты и услуги']];
+ const tabs=isClient?[['bookings','Мои записи'],['searches','История поиска'],['reviews','Мои отзывы']]:isMaster?[['bookings','Записи клиентов'],['schedule','Моё расписание'],['services','Мои услуги'],['professional-profile','Профиль специалиста']]:[['bookings','Все записи'],['moderation','Модерация отзывов'],['service-applications','Заявки на услуги'],['specialist-applications','Заявки специалистов'],['people','Специалисты и услуги']];
  if (isAdmin) tabs.push(['support','Обращения'], ['categories','Категории услуг'], ['audit','Журнал действий'], ['users','Пользователи'], ['profile','Профиль']);
  else tabs.push(['support','Поддержка'], ['profile','Профиль']);
  const application=data.specialist_application;
@@ -543,6 +607,7 @@ async function renderDashboard(background) {
 
  if(dashboardTab==='bookings'){
   root.innerHTML=`<div class="section-title"><h2>${isClient?'Мои встречи':'История записей'}</h2><select id="booking-status" aria-label="Статус записи"><option value="all">Все записи</option><option value="confirmed">Активные</option><option value="completed">Завершённые</option><option value="cancelled">Отменённые</option></select></div><div class="dashboard-update"><p>Время Кирова · UTC+3. Статус и действия проверяет сервер.</p><button id="refresh-bookings" class="button outline">Обновить статусы</button><p id="dashboard-update-status" role="status"></p></div>${isMaster ? '<button id="cancel-all-bookings" class="button outline">Отменить все предстоящие записи</button>' : ''}<div id="booking-list"></div>`;
+  if (isClient) showBookingRecovery(root);
   if (isMaster) $('#cancel-all-bookings').onclick = async event => {
    const button = event.currentTarget;
    button.disabled = true;
@@ -611,6 +676,8 @@ async function renderDashboard(background) {
    (reviews.length?reviews.map(r=>`<article class="review panel"><div><strong>${esc(r.specialist)}</strong><span class="stars">${'★'.repeat(r.rating)}</span></div><p>${esc(r.content)}</p><div class="review-meta"><small>${esc(r.author)} · ${date(r.created_at)}</small><span class="badge ${esc(r.status)}">${reviewStatuses[r.status]}</span></div>${isAdmin?`<div class="dialog-actions"><button data-moderate="${r.id}" data-status="approved" class="button pale" ${r.status==='approved'?'disabled':''}>Опубликовать</button><button data-moderate="${r.id}" data-status="rejected" class="button outline" ${r.status==='rejected'?'disabled':''}>Отклонить</button></div>`:''}</article>`).join(''): `<div class="empty">${isAdmin ? 'Отзывов с этим статусом нет.' : 'Отзывов пока нет. Клиент может оставить отзыв после завершённой встречи.'}</div>`);
   if (isAdmin) bindAdminFilter(root, 'review-filter');
   $$('[data-moderate]').forEach(b=>b.onclick=async()=>{try{await api('/admin/moderate',{kind:'review',id:Number(b.dataset.moderate),status:b.dataset.status});await refreshCatalog();await dashboard();toast('Статус отзыва обновлён', 'success');}catch(e){toast(e.message, 'error');}});
+ }else if(dashboardTab==='professional-profile'){
+  renderProfessionalProfile(root, section);
  }else if(dashboardTab==='profile'){
   if (isAdmin) renderAdminProfile(root, user);
   else renderAccountProfile(root, user);
@@ -768,7 +835,7 @@ async function renderDashboard(background) {
  }
 }
 function renderAuditLog(root, entries) {
- const actions = {specialist_rights_revoked:'Снятие прав специалиста', specialist_deleted:'Удаление специалиста', service_moderation:'Модерация услуги',
+ const actions = {account_deleted:'Удаление аккаунта',role_changed:'Смена роли',admin_message:'Сообщение администрации',specialist_rights_revoked:'Снятие прав специалиста', specialist_deleted:'Удаление специалиста', service_moderation:'Модерация услуги',
   moderation:'Решение модерации', booking_transition:'Изменение статуса записи'};
  const objects = {user:'Пользователь', booking:'Запись', specialist:'Специалист', service:'Услуга', review:'Отзыв'};
  const states = {...serviceStatus, confirmed:'Подтверждена', completed:'Завершена', cancelled:'Отменена'};
@@ -779,7 +846,8 @@ function renderAuditLog(root, entries) {
   catch { return states[raw] || raw; }
   const status = state?.draft_status || state?.moderation_status || state?.status;
   if (status) return states[status] || status;
-  if (state?.role === 'client') return 'Роль изменена на «Клиент»';
+  const roles = {client:'Клиент',master:'Специалист',admin:'Администратор'};
+  if (roles[state?.role]) return `Роль: ${roles[state.role]}`;
   if (state?.deleted) return 'Профиль удалён';
   return state?.active == null ? '' : state.active ? 'Показано в каталоге' : 'Скрыто из каталога';
  };
