@@ -136,6 +136,9 @@ CREATE TABLE notifications(
         OR
         (payment_id IS NULL AND booking_id IS NULL AND service_id IS NULL AND specialist_application_id IS NULL
             AND support_request_id IS NOT NULL AND event IN ('support_created','support_resolved'))
+        OR
+        (payment_id IS NULL AND booking_id IS NULL AND service_id IS NULL AND specialist_application_id IS NULL
+            AND support_request_id IS NULL AND event='specialist_revoked')
     ),
     UNIQUE(user_id,payment_id,event),
     UNIQUE(user_id,specialist_application_id),
@@ -179,7 +182,8 @@ def migrate_notifications(connection):
     columns = {row['name'] for row in connection.execute('PRAGMA table_info(notifications)')}
     schema = connection.execute("SELECT sql FROM sqlite_master WHERE name='notifications'").fetchone()
     if columns and ('support_request_id' not in columns or 'specialist_application_id' not in columns or
-                    'payment_id' not in columns or 'UNIQUE(user_id,service_id)' in schema['sql']):
+                    'payment_id' not in columns or 'specialist_revoked' not in schema['sql'] or
+                    'UNIQUE(user_id,service_id)' in schema['sql']):
         connection.execute('ALTER TABLE notifications RENAME TO previous_notifications')
         connection.execute(NOTIFICATIONS_TABLE)
         fields = 'id,user_id,booking_id,event,message,created_at,is_read'

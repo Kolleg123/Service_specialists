@@ -66,26 +66,6 @@ function showSupportForm(title = '', serviceForm = null) {
  (suggest ? form.elements.description : form.elements.title).focus();
 }
 
-function openSupportFromNotice(item, admin) {
- modal(`<h2>${esc(item.title)}</h2><p>${supportBadge(item.status)} · ${supportDate(item.created_at)}</p>
-  ${admin ? `<p class="muted">${supportSender(item)} · № ${item.user_id}</p>` : ''}
-  ${supportDetails(item)}<button id="support-go" class="button">Открыть обращение</button>`);
- $('#support-go').onclick = async () => {
-  supportView.status = 'all';
-  supportView.open.add(item.id);
-  dashboardTab = 'support';
-  closeModal();
-  try {
-   await dashboard();
-   const row = $(`[data-support-id="${item.id}"]`);
-   row?.scrollIntoView({block: 'center'});
-   $('summary', row ?? document)?.focus();
-  } catch (error) {
-   toast(error.message, 'error');
-  }
- };
-}
-
 function renderSupport(root, items, admin) {
  const status = supportView.status || (admin ? 'pending' : 'all');
  if (!$('#support-list', root)) {

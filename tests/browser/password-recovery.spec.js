@@ -17,6 +17,8 @@ test('request an email link, reset the password and sign in again', async ({ pag
   await page.locator('#login-form button').click();
   await expect(page.locator('.dashboard')).toBeVisible();
   await page.locator('#logout').click();
+  await page.locator('#logout-confirmation button[type=submit]').click();
+  await expect(page.locator('#logout')).toBeHidden();
   await page.locator('#account').click();
   await page.getByRole('button', { name: 'Забыли пароль?' }).click();
   await page.getByLabel('Электронная почта').fill(email);

@@ -7,6 +7,7 @@ async function login(page, role) {
 }
 async function logout(page) {
   await page.getByRole('button', { name: 'Выйти' }).click();
+  await page.locator('#logout-confirmation button[type=submit]').click();
   await expect(page.locator('#account')).toContainText('Личный кабинет');
 }
 

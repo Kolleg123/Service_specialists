@@ -75,7 +75,22 @@ function toast(message, type) {
   node.hidePopover?.();
  }, 4500);
 }
-function modal(html) {$('#modal-content').innerHTML = html; if (!$('#modal').open) $('#modal').showModal();}
+function modal(html, layout = '') {
+ const dialog = $('#modal');
+ const content = $('#modal-content');
+ const close = $('#modal-close');
+ dialog.insertBefore(close, content);
+ dialog.querySelector('.service-editor-header')?.remove();
+ dialog.dataset.layout = layout;
+ content.innerHTML = html;
+ if (layout === 'service-editor') {
+  const header = document.createElement('div');
+  header.className = 'service-editor-header';
+  header.append(content.querySelector('h2'), close);
+  dialog.insertBefore(header, content);
+ }
+ if (!dialog.open) dialog.showModal();
+}
 function closeModal() {
  if (!$('#modal form[data-pending-deletion]')) $('#modal').close();
 }
@@ -91,6 +106,7 @@ function endSession({csrf}) {
  stopNotificationPolling();
  clearTimeout(dashboardRefreshTimer);
  state.user = null;
+ focusAdminUser = null;
  state.csrf = csrf;
  specialistApplicationFilter = 'pending';
  serviceApplicationFilter = 'pending';
@@ -217,7 +233,7 @@ function bindNotifications(user) {
 
  function render() {
   const unread=notifications.filter(n=>!n.is_read).length;
-  count.textContent=unread;
+  count.textContent=unread > 99 ? '99+' : unread;
   count.classList.toggle('hidden',!unread);
   toggle.setAttribute('aria-label',unread?`Уведомления, непрочитанных: ${unread}`:'Уведомления');
   const scroll = $('.notification-list',panel)?.scrollTop ?? 0;
@@ -227,7 +243,7 @@ function bindNotifications(user) {
   </div><div class="notification-list">${notifications.length?notifications.map(n=>`
    <article class="notification-item ${n.is_read?'read':'unread'}">
     <span class="notification-dot ${['cancelled','service_rejected','specialist_rejected'].includes(n.event)?'warning':'success'}" aria-hidden="true"></span>
-    <div class="notification-copy"><button class="text-button" data-open-notification="${n.id}"><strong>${esc(n.message)}</strong></button>
+    <div class="notification-copy"><button class="text-button" data-open-notification="${n.id}"><strong>${n.event === 'specialist_revoked' ? 'Права специалиста сняты' : esc(n.message)}</strong></button>
      <small>${date(n.created_at.slice(0,10)+'T12:00:00')} · ${time(n.created_at)} (Киров)</small>
      ${n.is_read?'<small>Прочитано</small>':`<button class="text-button" data-read-notification="${esc(n.id)}">Отметить прочитанным</button>`}
     </div>
@@ -435,13 +451,24 @@ async function renderDashboard(background) {
   schedule:'/master', services:'/master', people:'/admin',
   'specialist-applications':'/admin/specialist-applications',
   'service-applications':'/admin/service-applications?status=' + serviceApplicationFilter,
-  support:'/support', categories:'/admin/categories', audit:'/admin/audit'
+  support:'/support', categories:'/admin/categories', audit:'/admin/audit', users:'/admin/users'
  }[tab];
  const [data, section] = await Promise.all([
   api(mode==='client' ? '/dashboard?mode=client' : '/dashboard'),
-  sectionPath ? api(sectionPath) : null
+  sectionPath ? api(sectionPath).catch(error => ({sectionError:error})) : null
  ]);
  if (requestId !== dashboardRequest || state.user !== previousUser || location.hash !== '#dashboard') return;
+ if (data.user.role !== previousUser.role) {
+  state.user = data.user;
+  dashboardMode = data.user.role === 'client' ? 'client' : 'master';
+  dashboardTab = 'bookings';
+  dashboardStatusFilter = 'all';
+  closeModal();
+  $('#support-dialog').close();
+  updateAccount();
+  return renderDashboard(false);
+ }
+ if (section?.sectionError) throw section.sectionError;
  const {server_now, ...snapshotData} = data;
  const snapshot = JSON.stringify([tab, mode, snapshotData, section]);
  const previousRoot = $('#dashboard-content');
@@ -486,7 +513,7 @@ async function renderDashboard(background) {
  const isMaster=hasSpecialistProfile && !isClient;
  if (hasSpecialistProfile) dashboardMode=mode;
  const tabs=isClient?[['bookings','Мои записи'],['searches','История поиска'],['reviews','Мои отзывы']]:isMaster?[['bookings','Записи клиентов'],['schedule','Моё расписание'],['services','Мои услуги']]:[['bookings','Все записи'],['moderation','Модерация отзывов'],['service-applications','Заявки на услуги'],['specialist-applications','Заявки специалистов'],['people','Специалисты и услуги']];
- if (isAdmin) tabs.push(['support','Обращения'], ['categories','Категории услуг'], ['audit','Журнал действий']);
+ if (isAdmin) tabs.push(['support','Обращения'], ['categories','Категории услуг'], ['audit','Журнал действий'], ['users','Пользователи'], ['profile','Профиль']);
  else tabs.push(['support','Поддержка'], ['profile','Профиль']);
  const application=data.specialist_application;
  if (isClient && (!hasSpecialistProfile || application)) {
@@ -585,7 +612,8 @@ async function renderDashboard(background) {
   if (isAdmin) bindAdminFilter(root, 'review-filter');
   $$('[data-moderate]').forEach(b=>b.onclick=async()=>{try{await api('/admin/moderate',{kind:'review',id:Number(b.dataset.moderate),status:b.dataset.status});await refreshCatalog();await dashboard();toast('Статус отзыва обновлён', 'success');}catch(e){toast(e.message, 'error');}});
  }else if(dashboardTab==='profile'){
-  renderAccountProfile(root, user);
+  if (isAdmin) renderAdminProfile(root, user);
+  else renderAccountProfile(root, user);
  }else if(dashboardTab==='schedule'||dashboardTab==='services'){
   const m=section;
   if(dashboardTab==='schedule'){
@@ -684,6 +712,8 @@ async function renderDashboard(background) {
     buttons.forEach(button => button.disabled = false);
    }
   });
+ }else if(dashboardTab==='users'){
+  renderAdminUsers(root, section.users);
  }else if(dashboardTab==='people'){
   const serviceFilter = adminFilters['service-visibility'];
   const services = section.services.filter(service => matchesVisibility(service, serviceFilter));
@@ -699,7 +729,8 @@ async function renderDashboard(background) {
       <div><h3>${esc(specialist.name)}</h3><p>${esc(specialist.profession)} · ${specialist.active ? 'В каталоге' : 'Скрыт'}</p></div>
       <button class="button ${specialist.active ? 'outline' : 'pale'}" data-toggle="specialist"
        data-id="${specialist.id}" data-active="${!specialist.active}">${specialist.active ? 'Скрыть' : 'Показать'}</button>
-      <button class="button outline danger" data-delete-specialist="${specialist.id}">Удалить</button>
+      ${specialist.account_id ? `<button class="button outline" data-user-account="${specialist.account_id}">Открыть аккаунт</button>` :
+       `<button class="button outline danger" data-delete-specialist="${specialist.id}">Удалить</button>`}
      </div>
      ${services.filter(service => service.specialist_id === specialist.id).map(service => `
       <div class="admin-service">
@@ -708,6 +739,11 @@ async function renderDashboard(background) {
         data-active="${!service.active}">${service.active ? 'Скрыть услугу' : 'Показать услугу'}</button>
       </div>`).join('')}
     </article>`).join('') : '<div class="empty">По выбранным фильтрам ничего не найдено.</div>');
+  $$('[data-user-account]', root).forEach(button => button.onclick = () => {
+   focusAdminUser = Number(button.dataset.userAccount);
+   dashboardTab = 'users';
+   dashboard().catch(error => toast(error.message, 'error'));
+  });
   bindAdminFilter(root, 'specialist-visibility');
   bindAdminFilter(root, 'service-visibility');
   $$('[data-toggle]').forEach(b=>b.onclick=async()=>{try{await api('/admin/moderate',{kind:b.dataset.toggle,id:Number(b.dataset.id),active:b.dataset.active==='true'});await refreshCatalog();await dashboard();toast('Изменения сохранены', 'success');}catch(e){toast(e.message, 'error');}});
@@ -732,9 +768,9 @@ async function renderDashboard(background) {
  }
 }
 function renderAuditLog(root, entries) {
- const actions = {specialist_deleted:'Удаление специалиста', service_moderation:'Модерация услуги',
+ const actions = {specialist_rights_revoked:'Снятие прав специалиста', specialist_deleted:'Удаление специалиста', service_moderation:'Модерация услуги',
   moderation:'Решение модерации', booking_transition:'Изменение статуса записи'};
- const objects = {booking:'Запись', specialist:'Специалист', service:'Услуга', review:'Отзыв'};
+ const objects = {user:'Пользователь', booking:'Запись', specialist:'Специалист', service:'Услуга', review:'Отзыв'};
  const states = {...serviceStatus, confirmed:'Подтверждена', completed:'Завершена', cancelled:'Отменена'};
  const describeState = raw => {
   if (!raw) return '';
@@ -743,6 +779,7 @@ function renderAuditLog(root, entries) {
   catch { return states[raw] || raw; }
   const status = state?.draft_status || state?.moderation_status || state?.status;
   if (status) return states[status] || status;
+  if (state?.role === 'client') return 'Роль изменена на «Клиент»';
   if (state?.deleted) return 'Профиль удалён';
   return state?.active == null ? '' : state.active ? 'Показано в каталоге' : 'Скрыто из каталога';
  };
@@ -801,12 +838,34 @@ $('#modal').addEventListener('cancel', event => {
  if ($('#modal form[data-pending-deletion]')) event.preventDefault();
 });
 $('#modal').onclick=e=>{if(e.target===$('#modal')){const r=$('#modal').getBoundingClientRect();if(e.clientX<r.left||e.clientX>r.right||e.clientY<r.top||e.clientY>r.bottom)closeModal();}};
-$('#logout').onclick = async event => {
- const button = event.currentTarget;
- button.disabled = true;
- try { endSession(await api('/logout', {})); }
- catch (error) { toast(error.message, 'error'); }
- finally { button.disabled = false; }
+$('#logout').onclick = () => {
+ modal(`<h2>Выйти из аккаунта?</h2>
+  <form id="logout-confirmation"><div class="dialog-actions">
+   <button type="button" class="button outline" id="stay-signed-in" autofocus>Остаться</button>
+   <button type="submit" class="button">Выйти</button>
+  </div><p class="form-error" role="alert"></p></form>`, 'compact');
+ const form = $('#logout-confirmation');
+ $('#stay-signed-in', form).onclick = closeModal;
+ $('#stay-signed-in', form).focus();
+ form.onsubmit = async event => {
+  event.preventDefault();
+  const button = $('button[type=submit]', form);
+  if (button.disabled) return;
+  button.disabled = true;
+  form.setAttribute('data-pending-deletion', '');
+  $('.form-error', form).textContent = '';
+  try {
+   const result = await api('/logout', {});
+   form.removeAttribute('data-pending-deletion');
+   closeModal();
+   endSession(result);
+  } catch (error) {
+   $('.form-error', form).textContent = error.message;
+  } finally {
+   form.removeAttribute('data-pending-deletion');
+   button.disabled = false;
+  }
+ };
 };
 $('#account').onclick=()=>{if(state.user){location.hash='dashboard';dashboard().catch(e=>toast(e.message, 'error'));}else login();};
 async function route(){const id=++catalogRequest;try{if(location.hash==='#dashboard'){await dashboard();}else{clearTimeout(dashboardRefreshTimer);stopNotificationPolling();await refreshCatalog();if(id!==catalogRequest)return;catalog();scheduleDashboardRefresh();if(location.hash==='#how')$('#how-section').scrollIntoView({behavior:'smooth'});if(location.hash==='#catalog-section')$('#catalog-section').scrollIntoView();}$$('[data-nav]').forEach(a=>a.classList.toggle('active',a.getAttribute('href')===(location.hash||'#catalog')));}catch(e){$('#chat').before(chatLauncher);$('#app').innerHTML=`<div class="empty" role="alert"><h2>Не удалось загрузить страницу</h2><p>${esc(e.message)}</p><button id="retry-page" class="button">Повторить загрузку</button></div>`;$('#retry-page').onclick=route;}}

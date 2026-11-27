@@ -72,7 +72,7 @@ function renderSpecialistApplications(root, applications) {
  const filtered = applications.filter(application => specialistApplicationFilter === 'all' ||
   application.status === specialistApplicationFilter).sort((a, b) => specialistApplicationOrder === 'oldest' ?
    new Date(a.created_at) - new Date(b.created_at) : new Date(b.created_at) - new Date(a.created_at));
- root.innerHTML = `<div class="section-title applications-heading"><h2>Заявки специалистов</h2>
+ root.innerHTML = `<div class="section-title applications-heading"><h2>Заявки специалистов</h2><div class="application-controls">
   <label class="field application-filter">Статус заявки
   <select id="specialist-application-filter">
    <option value="pending">На проверке</option><option value="approved">Одобренные</option>
@@ -80,7 +80,7 @@ function renderSpecialistApplications(root, applications) {
   </select></label>
   <label class="field application-order">Сортировка
    <select id="specialist-application-order"><option value="newest">Сначала новые</option><option value="oldest">Сначала старые</option></select>
-  </label></div>` + (filtered.length ? filtered.map(application => `
+  </label></div></div>` + (filtered.length ? filtered.map(application => `
   <details class="panel specialist-application-card" data-application-key="specialist-${application.id}">
    <summary><span class="application-summary-main"><strong>${esc(application.name)}</strong><span class="badge ${application.status}">${serviceStatus[application.status]}</span></span>
     <span class="application-summary-meta">${esc(application.profession)}</span>

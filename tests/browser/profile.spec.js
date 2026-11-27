@@ -110,13 +110,19 @@ test('specialist updates their public name and photo, and admin removes only the
 
   await admin.getByRole('button', {name:'Специалисты и услуги'}).click();
   const person = admin.locator('.admin-person').filter({hasText:'ФИО после обновления'});
-  await person.getByRole('button', {name:'Удалить', exact:true}).click();
+  await person.getByRole('button', {name:'Открыть аккаунт'}).click();
+  const account = admin.locator('.admin-user').filter({hasText:'ФИО после обновления'});
+  const revoke = account.getByRole('button', {name:'Снять права специалиста'});
+  await revoke.click();
   const confirmation = admin.locator('#modal');
-  await confirmation.getByRole('button', {name:'Оставить', exact:true}).click();
-  await expect(person).toBeVisible();
-  await person.getByRole('button', {name:'Удалить', exact:true}).click();
-  await confirmation.getByRole('button', {name:'Удалить навсегда'}).click();
-  await expect(person).toHaveCount(0);
+  await confirmation.getByRole('button', {name:'Оставить права'}).click();
+  await expect(revoke).toBeVisible();
+  await revoke.click();
+  await confirmation.getByLabel('Причина снятия прав').fill('Профиль закрыт по просьбе специалиста.');
+  await confirmation.getByRole('button', {name:'Снять права', exact:true}).click();
+  await expect(account.locator('summary')).toContainText('Клиент');
+  await admin.getByRole('button', {name:'Журнал действий'}).click();
+  await expect(admin.locator('.audit-log')).toContainText('Профиль закрыт по просьбе специалиста.');
   await page.reload();
   await expect(publicCard).toHaveCount(0);
   const session = await (await page.request.get('/api/session')).json();

@@ -334,9 +334,16 @@ def create_app(test_config=None):
             app.logger.warning('Could not remove an unused profile image', exc_info=True)
 
     @app.patch('/api/profile')
-    @auth(*CUSTOMER_ROLES)
+    @auth(*CUSTOMER_ROLES, 'admin')
     def update_profile(user):
         data = request.get_json()
+        if not isinstance(data, dict):
+            return fail('Некорректные данные профиля')
+        if user['role'] == 'admin':
+            fields = ('current_password', 'new_password', 'confirmation')
+            if set(data) != set(fields) or not all(isinstance(data[key], str) and data[key] for key in fields):
+                return fail('Заполните поля смены пароля')
+            data = {**data, 'name': user['name']}
         if isinstance(data.get('email'), str) and demo_email(data['email']) and not demo_mode:
             return fail('Этот почтовый домен зарезервирован для демонстрации')
         with db() as c:
@@ -399,6 +406,8 @@ def create_app(test_config=None):
             return fail('Специалист не найден', 404)
         with db() as c:
             c.execute('BEGIN IMMEDIATE')
+            if c.execute("SELECT 1 FROM users WHERE specialist_id=? AND role='master'", (ident,)).fetchone():
+                return fail('У профиля есть аккаунт. Снимите права в разделе «Пользователи» с указанием причины', 409)
             before = c.execute('SELECT id,name,active,deleted FROM specialists WHERE id=?', (ident,)).fetchone()
             photo = retire_specialist(c, ident)
             after = c.execute('SELECT id,name,active,deleted FROM specialists WHERE id=?', (ident,)).fetchone()
@@ -530,7 +539,7 @@ def create_app(test_config=None):
                 return fail('Уведомление не найдено', 404)
             c.execute('UPDATE notifications SET is_read=1 WHERE id=?', (ident,))
             target = notification_target(c, notice, user)
-        return jsonify(message=notice['message'], target=target)
+        return jsonify(message=notice['message'], event=notice['event'], created_at=notice['created_at'], target=target)
 
     def notification_target(c, notice, user):
         if notice['support_request_id'] is not None:
@@ -976,11 +985,62 @@ def create_app(test_config=None):
             return fail(str(error), error.status)
         return jsonify(id=ident), 201 if action == 'create' else 200
 
+    @app.get('/api/admin/users')
+    @auth('admin')
+    def admin_users(user):
+        with db() as c:
+            services = {}
+            for row in c.execute('SELECT specialist_id,title,active FROM services WHERE deleted=0 ORDER BY id'):
+                services.setdefault(row['specialist_id'], []).append(dict(row))
+            users = []
+            for row in c.execute('''SELECT u.id,u.name,u.username,u.email,u.role,p.id specialist_id,
+                    p.profession,COALESCE(cat.name,p.category) category,p.bio,p.active
+                    FROM users u LEFT JOIN specialists p ON p.id=u.specialist_id AND p.deleted=0
+                    LEFT JOIN service_categories cat ON cat.id=p.category_group_id
+                    WHERE u.role IN ('client','master','admin') ORDER BY u.id'''):
+                entry = {key: row[key] for key in ('id', 'name', 'username', 'email', 'role')}
+                entry['specialist'] = None
+                if row['specialist_id'] is not None:
+                    entry['specialist'] = {
+                        **{key: row[key] for key in ('profession', 'category', 'bio', 'active')},
+                        'services': services.get(row['specialist_id'], []),
+                    }
+                users.append(entry)
+        response = jsonify(users=users)
+        response.headers['Cache-Control'] = 'no-store'
+        return response
+
+    @app.post('/api/admin/users/<int:ident>/revoke-specialist')
+    @auth('admin')
+    def revoke_specialist(user, ident):
+        data = request.get_json()
+        reason = data.get('reason') if isinstance(data, dict) else None
+        if not isinstance(reason, str) or not 1 <= len(reason.strip()) <= 500:
+            return fail('Укажите причину снятия прав (до 500 символов)')
+        reason = reason.strip()
+        if not 1 <= ident < 2**63:
+            return fail('Пользователь не найден', 404)
+        with db() as c:
+            c.execute('BEGIN IMMEDIATE')
+            target = account(c, ident)
+            if not target:
+                return fail('Пользователь не найден', 404)
+            if target['role'] != 'master' or target['specialist_id'] is None:
+                return fail('У пользователя нет прав специалиста', 409)
+            photo = retire_specialist(c, target['specialist_id'])
+            audit(c, user['id'], 'specialist_rights_revoked', 'user', ident,
+                  {'role': 'master'}, {'role': 'client'}, reason)
+            c.execute('INSERT INTO notifications(user_id,event,message,created_at) VALUES(?,?,?,?)',
+                      (ident, 'specialist_revoked', 'Причина: ' + reason, now().isoformat(timespec='seconds')))
+        cleanup_avatars((photo,))
+        return jsonify(ok=True)
+
     @app.get('/api/admin')
     @auth('admin')
     def admin(user):
         with db() as c:
-            return jsonify(specialists=[dict(r) for r in c.execute('SELECT * FROM specialists WHERE deleted=0')],
+            return jsonify(specialists=[dict(r) for r in c.execute('''SELECT p.*,(SELECT u.id FROM users u WHERE u.specialist_id=p.id AND u.role='master'
+                               ORDER BY u.id LIMIT 1) account_id FROM specialists p WHERE p.deleted=0''')],
                            services=[dict(r) for r in c.execute('SELECT v.*,p.name specialist FROM services v JOIN specialists p ON p.id=v.specialist_id WHERE v.deleted=0')])
 
     @app.post('/api/specialist-applications')

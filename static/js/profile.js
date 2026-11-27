@@ -37,23 +37,7 @@ function renderAccountProfile(root, user) {
     </form>
    </section>
   </div>
-  <section class="profile-security"><h3>Смена пароля</h3>
-   <button id="change-password" class="button outline" type="button">Изменить пароль</button>
-   <form id="profile-password-form" hidden>
-     <label class="field">Текущий пароль<input id="profile-current-password" name="current_password" type="password" autocomplete="current-password" required></label>
-     <label class="field">Новый пароль<input id="profile-new-password" name="new_password" type="password" minlength="8" maxlength="128" autocomplete="new-password" required></label>
-     <label class="field">Повторите новый пароль<input id="profile-confirm-password" name="confirmation" type="password" minlength="8" maxlength="128" autocomplete="new-password" required></label>
-     <div class="profile-form-actions">
-      <button type="button" id="toggle-profile-passwords" class="button outline">Показать пароли</button>
-      <button type="button" id="profile-forgot-password" class="text-button">Забыли пароль?</button>
-     </div>
-    <p class="form-error" role="alert"></p>
-    <div class="profile-form-actions">
-     <button class="button" type="submit">Сохранить пароль</button>
-     <button class="button outline" type="button" id="cancel-password-edit">Отмена</button>
-    </div>
-   </form>
-  </section>
+  ${passwordForm()}
   <div class="danger-zone"><h3>Удаление аккаунта</h3>
    <p>Удаление необратимо. Предстоящие записи сначала нужно отменить.</p>
    <button id="delete-account" class="button outline danger">Удалить мой аккаунт</button>
@@ -219,12 +203,58 @@ function renderAccountProfile(root, user) {
   return saveAccountProfile(details, Object.fromEntries(new FormData(details)), 'Профиль сохранён');
  };
 
+ const passwords = bindPasswordForm(root, () => {
+  if (!details.hidden) $('#cancel-profile-edit', details).click();
+ });
+
+ $('#delete-account', root).onclick = () => {
+  managementConfirmation('Удалить аккаунт?',
+   'Ваш аккаунт будет удалён в обоих режимах. История встреч сохранится с обезличенным именем. Действие нельзя отменить.',
+   false, async () => {
+    const response = await api('/account', undefined, 'DELETE');
+    endSession(response);
+    return 'Аккаунт удалён';
+   }, {back: 'Оставить аккаунт', confirm: 'Удалить навсегда', confirmClass: 'danger-solid', lockWhilePending: true});
+ };
+}
+
+function renderAdminProfile(root, user) {
+ root.innerHTML = `<div class="panel profile-settings">
+  <h2>Профиль администратора</h2>
+  <dl class="detail-grid"><dt>Имя</dt><dd>${esc(user.name)}</dd><dt>Логин</dt><dd>${esc(user.username || '—')}</dd>
+   <dt>Почта</dt><dd>${esc(user.email || '—')}</dd></dl>
+  ${passwordForm()}
+ </div>`;
+ bindPasswordForm(root);
+}
+
+function passwordForm() {
+ return `<section class="profile-security"><h3>Смена пароля</h3>
+   <button id="change-password" class="button outline" type="button">Изменить пароль</button>
+   <form id="profile-password-form" hidden>
+     <label class="field">Текущий пароль<input id="profile-current-password" name="current_password" type="password" autocomplete="current-password" required></label>
+     <label class="field">Новый пароль<input id="profile-new-password" name="new_password" type="password" minlength="8" maxlength="128" autocomplete="new-password" required></label>
+     <label class="field">Повторите новый пароль<input id="profile-confirm-password" name="confirmation" type="password" minlength="8" maxlength="128" autocomplete="new-password" required></label>
+     <div class="profile-form-actions">
+      <button type="button" id="toggle-profile-passwords" class="button outline">Показать пароли</button>
+      <button type="button" id="profile-forgot-password" class="text-button">Забыли пароль?</button>
+     </div>
+    <p class="form-error" role="alert"></p>
+    <div class="profile-form-actions">
+     <button class="button" type="submit">Сохранить пароль</button>
+     <button class="button outline" type="button" id="cancel-password-edit">Отмена</button>
+    </div>
+   </form>
+  </section>`;
+}
+
+function bindPasswordForm(root, beforeEdit) {
  const passwords = $('#profile-password-form', root);
  const changePassword = $('#change-password', root);
  const showPasswords = $('#toggle-profile-passwords', passwords);
  const passwordFields = [...passwords.querySelectorAll('input')];
  changePassword.onclick = () => {
-  if (!details.hidden) $('#cancel-profile-edit', details).click();
+  beforeEdit?.();
   passwords.hidden = false;
   changePassword.hidden = true;
   passwordFields[0].focus();
@@ -247,18 +277,10 @@ function renderAccountProfile(root, user) {
  passwords.onsubmit = event => {
   event.preventDefault();
   const data = Object.fromEntries(new FormData(passwords));
-  return saveAccountProfile(passwords, {...data, name:state.user.name}, 'Пароль изменён');
+  return saveAccountProfile(passwords, state.user.role === 'admin' ? data : {...data, name:state.user.name}, 'Пароль изменён');
  };
 
- $('#delete-account', root).onclick = () => {
-  managementConfirmation('Удалить аккаунт?',
-   'Ваш аккаунт будет удалён в обоих режимах. История встреч сохранится с обезличенным именем. Действие нельзя отменить.',
-   false, async () => {
-    const response = await api('/account', undefined, 'DELETE');
-    endSession(response);
-    return 'Аккаунт удалён';
-   }, {back: 'Оставить аккаунт', confirm: 'Удалить навсегда', confirmClass: 'danger-solid', lockWhilePending: true});
- };
+ return passwords;
 }
 
 async function saveAccountProfile(form, data, message) {
