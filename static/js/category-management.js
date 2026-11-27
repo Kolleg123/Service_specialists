@@ -138,13 +138,13 @@ function bindDirectoryAction(form, path, data, message) {
  $('[data-directory-back]', form).onclick = closeModal;
  form.onsubmit = async event => {
   event.preventDefault();
-  const submit = $('button', form);
+  const submit = $('button:not([type]),button[type=submit]', form);
   submit.disabled = true;
   try {
    await api(path, data());
    if (form.isConnected) closeModal();
    await dashboard();
-   toast(message);
+   toast(message, 'success');
   } catch (error) {
    $('.form-error', form).textContent = error.message;
   } finally {

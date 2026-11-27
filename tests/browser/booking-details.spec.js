@@ -77,7 +77,7 @@ test('the mobile service editor shows the address only for relevant formats', as
   await login(page, 'Мастер');
   await page.getByRole('button', {name: 'Мои услуги'}).click();
   const form = page.locator('#service-form');
-  const mode = form.getByLabel('Формат');
+  const mode = form.locator('select[name=mode]');
   const address = form.getByLabel('Адрес оказания услуги');
   await expect(address).toBeHidden();
   await mode.selectOption('У специалиста');

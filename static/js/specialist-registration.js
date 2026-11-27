@@ -49,12 +49,12 @@ function renderSpecialistApplication(root, application, user, categories) {
   event.preventDefault();
   const data = Object.fromEntries(new FormData(form));
   data.experience = Number(data.experience);
-  const button = $('button', form);
+  const button = $('button:not([type]),button[type=submit]', form);
   button.disabled = true;
   try {
    await api('/specialist-applications', data);
    await dashboard();
-   toast('Заявка отправлена администратору');
+   toast('Заявка отправлена администратору', 'success');
   } catch (error) {
    $('.form-error', form).textContent = error.message;
   } finally {
@@ -67,11 +67,12 @@ let specialistApplicationFilter = 'pending';
 let specialistApplicationOrder = 'newest';
 
 function renderSpecialistApplications(root, applications) {
- const fields = [...applicationTextFields, ['category', 'Категория'], ['experience', 'Опыт работы, полных лет']];
+ const fields = [['account_name','Аккаунт'], ['email','Электронная почта'], ...applicationTextFields.slice(2),
+  ['category', 'Категория'], ['experience', 'Опыт работы, полных лет']];
  const filtered = applications.filter(application => specialistApplicationFilter === 'all' ||
   application.status === specialistApplicationFilter).sort((a, b) => specialistApplicationOrder === 'oldest' ?
    new Date(a.created_at) - new Date(b.created_at) : new Date(b.created_at) - new Date(a.created_at));
- root.innerHTML = `<div class="section-title applications-heading"><div><span class="eyebrow">АДМИНИСТРИРОВАНИЕ</span><h2>Заявки специалистов</h2><p class="muted">Проверьте данные кандидата перед принятием решения.</p></div>
+ root.innerHTML = `<div class="section-title applications-heading"><h2>Заявки специалистов</h2>
   <label class="field application-filter">Статус заявки
   <select id="specialist-application-filter">
    <option value="pending">На проверке</option><option value="approved">Одобренные</option>
@@ -82,7 +83,7 @@ function renderSpecialistApplications(root, applications) {
   </label></div>` + (filtered.length ? filtered.map(application => `
   <details class="panel specialist-application-card" data-application-key="specialist-${application.id}">
    <summary><span class="application-summary-main"><strong>${esc(application.name)}</strong><span class="badge ${application.status}">${serviceStatus[application.status]}</span></span>
-    <span class="application-summary-meta">${esc(application.account_name)} · ${esc(application.email)}</span>
+    <span class="application-summary-meta">${esc(application.profession)}</span>
     <span class="application-summary-date">Подана ${date(application.created_at)} в ${time(application.created_at)}</span></summary>
    <div class="application-details-heading"><h3>Анкета кандидата</h3><span class="muted">Заявка №${application.id}</span></div>
    <dl>${fields.map(([key, label]) => `<dt><strong>${label}</strong></dt><dd>${esc(application[key])}</dd>`).join('')}</dl>
@@ -103,14 +104,14 @@ function renderSpecialistApplications(root, applications) {
  filter.onchange = () => {
   specialistApplicationFilter = filter.value;
   renderSpecialistApplications(root, applications);
-  $('#specialist-application-filter', root).focus();
+  queueMicrotask(() => $('#specialist-application-filter', root)?.focus());
  };
  const order = $('#specialist-application-order', root);
  order.value = specialistApplicationOrder;
  order.onchange = () => {
   specialistApplicationOrder = order.value;
   renderSpecialistApplications(root, applications);
-  $('#specialist-application-order', root).focus();
+  queueMicrotask(() => $('#specialist-application-order', root)?.focus());
  };
 
  $$('form[data-application-id]', root).forEach(form => form.onsubmit = async event => {
@@ -129,7 +130,7 @@ function renderSpecialistApplications(root, applications) {
   try {
    await api(`/admin/specialist-applications/${form.dataset.applicationId}/decision`, {status, reason});
    await dashboard();
-   toast('Решение сохранено');
+   toast('Решение сохранено', 'success');
   } catch (error) {
    feedback.textContent = error.message;
   } finally {

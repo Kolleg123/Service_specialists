@@ -56,3 +56,34 @@ for (const width of [390,1280]) {
     expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
   });
 }
+
+test('searchable dropdown supports touch, keyboard and Escape inside the booking dialog', async ({browser, baseURL}) => {
+  const page = await browser.newPage({baseURL,viewport:{width:390,height:844},hasTouch:true,isMobile:true});
+  try {
+    await page.goto('/');
+    const trigger = page.getByRole('button',{name:/Направление —/});
+    await trigger.tap();
+    const menu = page.locator('.select-popup:popover-open');
+    const search = menu.getByRole('searchbox');
+    await expect(search).toBeFocused();
+    await search.fill('образ');
+    await expect(menu.getByRole('option')).toHaveCount(1);
+    await page.keyboard.press('ArrowDown');
+    await page.keyboard.press('Enter');
+    await expect(page.locator('#direction-filter')).toHaveValue('education');
+    await expect(trigger).toHaveAttribute('aria-expanded','false');
+    await page.getByRole('button',{name:/Профиль: Анна Лебедева/}).tap();
+    const service = page.getByRole('button',{name:/Услуга —/});
+    await service.tap();
+    await expect(menu).toBeVisible();
+    const bounds = await menu.boundingBox();
+    expect(bounds.x).toBeGreaterThanOrEqual(0);
+    expect(bounds.x + bounds.width).toBeLessThanOrEqual(390);
+    await page.keyboard.press('Escape');
+    await expect(menu).toHaveCount(0);
+    await expect(service).toBeFocused();
+    await expect(page.locator('#modal')).toBeVisible();
+  } finally {
+    await page.close();
+  }
+});

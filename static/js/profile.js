@@ -1,13 +1,12 @@
 function renderAccountProfile(root, user) {
  const avatar = user.avatar ? `<img src="${esc(user.avatar)}" alt="">` : `<span>${esc(user.name[0])}</span>`;
  root.innerHTML = `<div class="panel profile-settings">
-  <div class="profile-settings-head"><div><span class="eyebrow">МОЙ ПРОФИЛЬ</span><h2>Данные аккаунта</h2>
-   <p class="muted">Просматривайте личные данные и изменяйте их по необходимости.</p></div></div>
+  <h2>Настройки профиля</h2>
   <div class="profile-settings-grid">
-   <section><h3>Аватар</h3><div class="avatar-editor">
+   <section><h3>Фотография профиля</h3><div class="avatar-editor">
      <div class="avatar-cropper">
       <div id="avatar-preview" aria-label="Круглый предпросмотр аватарки">${avatar}</div>
-      <span class="muted">Перетаскивайте фото, чтобы выбрать область</span>
+      <span id="avatar-crop-hint" class="muted" hidden>Перетащите фото или используйте стрелки</span>
      </div>
      <form id="avatar-form">
       <label class="button outline file-button">Выбрать фото
@@ -23,22 +22,13 @@ function renderAccountProfile(root, user) {
     <div id="profile-view" class="profile-view">
      <p><span>ФИО</span><strong>${esc(user.name)}</strong></p>
      <p><span>Неизменяемый логин</span><strong>${esc(user.username || '—')}</strong></p>
-     <p><span>Электронная почта</span><strong>${esc(user.email || '—')}</strong></p>
+     <h3>Электронная почта</h3><p class="profile-email"><strong>${esc(user.email || '—')}</strong></p>
      <button id="edit-profile" class="button">Изменить данные</button>
     </div>
     <form id="profile-form" hidden>
      <label class="field">ФИО<input name="name" value="${esc(user.name)}" minlength="2" maxlength="80" required></label>
-     <label class="field">Логин<input value="${esc(user.username || '—')}" disabled readonly></label>
      <label class="field">Электронная почта<input name="email" type="email" value="${esc(user.email || '')}" maxlength="120" autocomplete="email" required></label>
      <p class="profile-email-note">Почта используется для восстановления пароля. Логин остаётся неизменным.</p>
-     <h3 class="settings-subtitle">Смена пароля</h3>
-     <label class="field">Текущий пароль<input id="profile-current-password" name="current_password" type="password" autocomplete="current-password"></label>
-     <label class="field">Новый пароль<input id="profile-new-password" name="new_password" type="password" minlength="8" maxlength="128" autocomplete="new-password"></label>
-     <label class="field">Повторите новый пароль<input id="profile-confirm-password" name="confirmation" type="password" minlength="8" maxlength="128" autocomplete="new-password"></label>
-     <div class="profile-form-actions">
-      <button type="button" id="toggle-profile-passwords" class="button outline">Показать пароли</button>
-      <button type="button" id="profile-forgot-password" class="text-button">Забыли пароль?</button>
-     </div>
      <p class="form-error" role="alert"></p>
      <div class="profile-form-actions">
       <button class="button" type="submit">Сохранить изменения</button>
@@ -47,6 +37,23 @@ function renderAccountProfile(root, user) {
     </form>
    </section>
   </div>
+  <section class="profile-security"><h3>Смена пароля</h3>
+   <button id="change-password" class="button outline" type="button">Изменить пароль</button>
+   <form id="profile-password-form" hidden>
+     <label class="field">Текущий пароль<input id="profile-current-password" name="current_password" type="password" autocomplete="current-password" required></label>
+     <label class="field">Новый пароль<input id="profile-new-password" name="new_password" type="password" minlength="8" maxlength="128" autocomplete="new-password" required></label>
+     <label class="field">Повторите новый пароль<input id="profile-confirm-password" name="confirmation" type="password" minlength="8" maxlength="128" autocomplete="new-password" required></label>
+     <div class="profile-form-actions">
+      <button type="button" id="toggle-profile-passwords" class="button outline">Показать пароли</button>
+      <button type="button" id="profile-forgot-password" class="text-button">Забыли пароль?</button>
+     </div>
+    <p class="form-error" role="alert"></p>
+    <div class="profile-form-actions">
+     <button class="button" type="submit">Сохранить пароль</button>
+     <button class="button outline" type="button" id="cancel-password-edit">Отмена</button>
+    </div>
+   </form>
+  </section>
   <div class="danger-zone"><h3>Удаление аккаунта</h3>
    <p>Удаление необратимо. Предстоящие записи сначала нужно отменить.</p>
    <button id="delete-account" class="button outline danger">Удалить мой аккаунт</button>
@@ -58,8 +65,11 @@ function renderAccountProfile(root, user) {
  const preview = $('#avatar-preview', root);
  const zoomControl = $('#avatar-zoom', avatarForm);
  const saveAvatar = $('button[type="submit"]', avatarForm);
+ const hint = $('#avatar-crop-hint', root);
  const errorAvatar = $('.form-error', avatarForm);
  let image = null;
+ let currentAvatar = avatar;
+ let selection = 0;
  let zoom = 1;
  let offsetX = 0;
  let offsetY = 0;
@@ -80,10 +90,10 @@ function renderAccountProfile(root, user) {
   offsetY = Math.min(0, Math.max(minY, offsetY));
   ctx.clearRect(0, 0, 512, 512);
   ctx.drawImage(image, offsetX, offsetY, width, height);
-  if (!$('#avatar-crop-canvas', preview)) preview.innerHTML = '';
   if (canvas.parentElement !== preview) preview.replaceChildren(canvas);
  };
- avatarFile.onchange = () => {
+ avatarFile.onchange = async () => {
+  const request = ++selection;
   const file = avatarFile.files[0];
   image = null;
   errorAvatar.textContent = '';
@@ -91,31 +101,58 @@ function renderAccountProfile(root, user) {
   zoomControl.disabled = true;
   zoomControl.value = '1';
   zoom = 1;
-  if (!file) { preview.innerHTML = avatar; return; }
+  preview.removeAttribute('aria-busy');
+  preview.innerHTML = currentAvatar;
+  hint.hidden = true;
+  dragging = false;
+  if (!file) return;
   if (!['image/jpeg', 'image/png', 'image/webp'].includes(file.type)) {
-   errorAvatar.textContent = 'Выберите изображение JPG, PNG или WEBP'; avatarFile.value = ''; preview.innerHTML = avatar; return;
+   errorAvatar.textContent = 'Выберите изображение JPG, PNG или WEBP'; avatarFile.value = ''; return;
   }
   if (file.size > 1024 * 1024) {
-   errorAvatar.textContent = 'Размер фотографии не должен превышать 1 МБ'; avatarFile.value = ''; preview.innerHTML = avatar; return;
+   errorAvatar.textContent = 'Размер фотографии не должен превышать 1 МБ'; avatarFile.value = ''; return;
   }
-  const reader = new FileReader();
-  reader.onload = () => {
-   const candidate = new Image();
-   candidate.onload = () => {
-    image = candidate;
-    const base = Math.max(512 / image.naturalWidth, 512 / image.naturalHeight);
-    offsetX = (512 - image.naturalWidth * base) / 2;
-    offsetY = (512 - image.naturalHeight * base) / 2;
-    zoomControl.disabled = false; saveAvatar.disabled = false; drawCrop();
-   };
-   candidate.onerror = () => { errorAvatar.textContent = 'Не удалось открыть изображение'; };
-   candidate.src = reader.result;
-  };
-  reader.readAsDataURL(file);
+  const candidate = new Image();
+  const url = URL.createObjectURL(file);
+  preview.setAttribute('aria-busy', 'true');
+  try {
+   candidate.src = url;
+   await candidate.decode();
+   if (request !== selection || !preview.isConnected) return;
+   image = candidate;
+   const base = Math.max(512 / image.naturalWidth, 512 / image.naturalHeight);
+   offsetX = (512 - image.naturalWidth * base) / 2;
+   offsetY = (512 - image.naturalHeight * base) / 2;
+   zoomControl.disabled = false;
+   saveAvatar.disabled = false;
+   hint.hidden = false;
+   drawCrop();
+  } catch {
+   if (request === selection) errorAvatar.textContent = 'Не удалось открыть изображение';
+  } finally {
+   URL.revokeObjectURL(url);
+   if (request === selection) preview.removeAttribute('aria-busy');
+  }
  };
- zoomControl.oninput = () => { zoom = Number(zoomControl.value); drawCrop(); };
+ zoomControl.oninput = () => {
+  const scale = Number(zoomControl.value) / zoom;
+  offsetX = 256 + (offsetX - 256) * scale;
+  offsetY = 256 + (offsetY - 256) * scale;
+  zoom = Number(zoomControl.value);
+  drawCrop();
+ };
  canvas.className = 'avatar-crop-canvas';
- canvas.setAttribute('aria-label', 'Перетащите фото для кадрирования');
+ canvas.tabIndex = 0;
+ canvas.setAttribute('aria-label', 'Область кадрирования фотографии');
+ canvas.setAttribute('aria-describedby', 'avatar-crop-hint');
+ canvas.addEventListener('keydown', event => {
+  const offset = {ArrowLeft:[-16,0], ArrowRight:[16,0], ArrowUp:[0,-16], ArrowDown:[0,16]}[event.key];
+  if (!offset) return;
+  event.preventDefault();
+  offsetX += offset[0];
+  offsetY += offset[1];
+  drawCrop();
+ });
  canvas.addEventListener('pointerdown', event => {
   if (!image) return;
   dragging = true; canvas.setPointerCapture(event.pointerId);
@@ -131,30 +168,41 @@ function renderAccountProfile(root, user) {
  });
  const stopDrag = () => { dragging = false; dragStart = null; };
  canvas.addEventListener('pointerup', stopDrag);
- canvas.addEventListener('pointercancel', stopDrag);
+ canvas.addEventListener('lostpointercapture', stopDrag);
  avatarForm.onsubmit = async event => {
   event.preventDefault();
+  if (saveAvatar.disabled) return;
   if (!image) { errorAvatar.textContent = 'Сначала выберите фотографию'; return; }
-  saveAvatar.disabled = true; errorAvatar.textContent = '';
+  const userId = state.user.id;
+  saveAvatar.disabled = avatarFile.disabled = zoomControl.disabled = true;
+  saveAvatar.textContent = 'Сохраняем…';
+  errorAvatar.textContent = '';
   try {
    const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/jpeg', .9));
    if (!blob) throw new Error('Не удалось подготовить фотографию');
    const formData = new FormData();
    formData.append('avatar', new File([blob], 'avatar.jpg', {type:'image/jpeg'}));
    const result = await api('/profile/avatar', formData, 'POST');
+   if (state.user?.id !== userId) return;
    state.user = result.user; state.csrf = result.csrf; updateAccount();
-   toast('Фото профиля обновлено');
+   toast('Фото профиля обновлено', 'success');
    image = null; avatarFile.value = ''; zoomControl.value = '1'; zoomControl.disabled = true;
    saveAvatar.disabled = true;
-   const refreshedAvatar = state.user.avatar ? `<img src="${esc(state.user.avatar)}" alt="">` : `<span>${esc(state.user.name[0])}</span>`;
-   preview.innerHTML = refreshedAvatar;
+   hint.hidden = true;
+   currentAvatar = state.user.avatar ? `<img src="${esc(state.user.avatar)}" alt="">` : `<span>${esc(state.user.name[0])}</span>`;
+   preview.innerHTML = currentAvatar;
   } catch (error) { errorAvatar.textContent = error.message; }
-  finally { saveAvatar.disabled = !image; }
+  finally {
+   avatarFile.disabled = false;
+   saveAvatar.disabled = zoomControl.disabled = !image;
+   saveAvatar.textContent = 'Сохранить фото';
+  }
  };
 
  const view = $('#profile-view', root);
  const details = $('#profile-form', root);
  $('#edit-profile', root).onclick = () => {
+  if (!passwords.hidden) $('#cancel-password-edit', passwords).click();
   view.hidden = true;
   details.hidden = false;
   details.elements.name.focus();
@@ -162,24 +210,44 @@ function renderAccountProfile(root, user) {
  $('#cancel-profile-edit', root).onclick = () => {
   details.reset();
   $('.form-error', details).textContent = '';
-  $$('input[type="password"]', details).forEach(input => input.type = 'password');
-  $('#toggle-profile-passwords', details).textContent = 'Показать пароли';
   details.hidden = true;
   view.hidden = false;
+  $('#edit-profile', view).focus();
  };
- $('#toggle-profile-passwords', details).onclick = event => {
-  const fields = $$('input[type="password"], input[data-visible-password]', details);
-  const reveal = fields.some(input => input.type === 'password');
-  fields.forEach(input => {
-   input.type = reveal ? 'text' : 'password';
-   input.dataset.visiblePassword = reveal ? 'true' : '';
-  });
-  event.currentTarget.textContent = reveal ? 'Скрыть пароли' : 'Показать пароли';
- };
- $('#profile-forgot-password', details).onclick = () => requestPasswordReset();
  details.onsubmit = event => {
   event.preventDefault();
-  return saveAccountProfile(details, '/profile', Object.fromEntries(new FormData(details)), 'PATCH', 'Профиль сохранён');
+  return saveAccountProfile(details, Object.fromEntries(new FormData(details)), 'Профиль сохранён');
+ };
+
+ const passwords = $('#profile-password-form', root);
+ const changePassword = $('#change-password', root);
+ const showPasswords = $('#toggle-profile-passwords', passwords);
+ const passwordFields = [...passwords.querySelectorAll('input')];
+ changePassword.onclick = () => {
+  if (!details.hidden) $('#cancel-profile-edit', details).click();
+  passwords.hidden = false;
+  changePassword.hidden = true;
+  passwordFields[0].focus();
+ };
+ $('#cancel-password-edit', passwords).onclick = () => {
+  passwords.reset();
+  $('.form-error', passwords).textContent = '';
+  passwordFields.forEach(input => input.type = 'password');
+  showPasswords.textContent = 'Показать пароли';
+  passwords.hidden = true;
+  changePassword.hidden = false;
+  changePassword.focus();
+ };
+ showPasswords.onclick = () => {
+  const reveal = passwordFields[0].type === 'password';
+  passwordFields.forEach(input => input.type = reveal ? 'text' : 'password');
+  showPasswords.textContent = reveal ? 'Скрыть пароли' : 'Показать пароли';
+ };
+ $('#profile-forgot-password', passwords).onclick = () => requestPasswordReset();
+ passwords.onsubmit = event => {
+  event.preventDefault();
+  const data = Object.fromEntries(new FormData(passwords));
+  return saveAccountProfile(passwords, {...data, name:state.user.name}, 'Пароль изменён');
  };
 
  $('#delete-account', root).onclick = () => {
@@ -193,7 +261,7 @@ function renderAccountProfile(root, user) {
  };
 }
 
-async function saveAccountProfile(form, path, data, method, message, onError) {
+async function saveAccountProfile(form, data, message) {
  const button = $('button[type=submit]', form);
  const errorMessage = $('.form-error', form);
  if (button.disabled) return;
@@ -201,15 +269,14 @@ async function saveAccountProfile(form, path, data, method, message, onError) {
  button.disabled = true;
  errorMessage.textContent = '';
  try {
-  const result = await api(path, data, method);
+  const result = await api('/profile', data, 'PATCH');
   if (state.user?.id !== userId) return;
   state.user = result.user;
   state.csrf = result.csrf;
   updateAccount();
   if (location.hash === '#dashboard') await dashboard();
-  toast(message);
+  toast(message, 'success');
  } catch (error) {
-  onError?.();
   errorMessage.textContent = error.message;
  } finally {
   button.disabled = false;

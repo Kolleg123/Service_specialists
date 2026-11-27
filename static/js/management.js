@@ -35,7 +35,7 @@ function openNotificationDetails({message, target}) {
     target.kind === 'service' ? $(`[data-service-id="${item.id}"]`) : null;
    row?.scrollIntoView({block:'center'});
   } catch (error) {
-   toast(error.message);
+   toast(error.message, 'error');
   }
  };
 }
@@ -62,7 +62,7 @@ function managementConfirmation(title, description, reason, action, options = {}
    const message = await action(form.elements.reason?.value ?? '');
    form.removeAttribute('data-pending-deletion');
    if (form.isConnected) closeModal();
-   toast(message);
+   toast(message, 'success');
    if (location.hash === '#dashboard') await dashboard();
   } catch (error) {
    $('.form-error', form).textContent = error.message;
@@ -122,8 +122,8 @@ function bindServiceForm(form, path, categories, initialCategory, inModal = fals
     await api(path, data);
    }
    if (inModal && form.isConnected) closeModal();
-   toast('Услуга отправлена на проверку');
-   dashboard().catch(error => toast(error.message));
+   toast('Услуга отправлена на проверку', 'success');
+   dashboard().catch(error => toast(error.message, 'error'));
   } catch (error) {
    $('.form-error', form).textContent = error.message;
   } finally {
@@ -168,7 +168,7 @@ function renderManagedServices(root, services, categories) {
     const {services: updated} = await api('/master');
     if (!row.isConnected) return;
     const current = updated.find(item => item.id === service.id);
-    if (!current) return toast('Услуга уже недоступна');
+    if (!current) return toast('Услуга уже недоступна', 'warning');
     const warning = current.upcoming_count ? `Предстоящих записей: ${current.upcoming_count}. ` : '';
     managementConfirmation('Удалить услугу?', warning + 'Существующие записи сохранятся. Новые записи будут недоступны.',
      false, async () => {
@@ -176,7 +176,7 @@ function renderManagedServices(root, services, categories) {
       return 'Услуга удалена';
      });
    } catch (error) {
-    toast(error.message);
+    toast(error.message, 'error');
    }
   };
  }

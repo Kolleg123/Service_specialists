@@ -56,7 +56,7 @@ test('booking, cancellation, review, moderation, schedule and consultation', asy
   await page.getByRole('button', { name: 'Модерация отзывов' }).click();
   await page.getByRole('button', { name: 'Опубликовать', exact: true }).first().click();
   await expect(page.getByText('Очень внимательный мастер. Всё исправил быстро и аккуратно.')).toHaveCount(0);
-  await page.getByLabel('Статус отзыва').selectOption('approved');
+  await page.locator('#review-filter').selectOption('approved');
   const publishedReview = page.locator('.review').filter({ hasText: 'Очень внимательный мастер. Всё исправил быстро и аккуратно.' });
   await expect(publishedReview.getByRole('button', { name: 'Опубликовать', exact: true })).toBeDisabled();
   await page.getByRole('button', { name: 'Специалисты и услуги' }).click();
@@ -87,7 +87,7 @@ test('booking, cancellation, review, moderation, schedule and consultation', asy
   await page.getByRole('button', { name: 'Мои услуги' }).click();
   await page.getByLabel('Название', { exact: true }).fill('Проверка сантехнического оборудования');
   await page.getByLabel('Стоимость, ₽').fill('1700');
-  await page.getByLabel('Категория услуги').selectOption('plumbing');
+  await page.locator('select[name=category_id]').selectOption('plumbing');
   await page.getByRole('button', { name: 'Добавить услугу' }).click();
   await expect(page.getByRole('heading', { name: 'Проверка сантехнического оборудования' })).toBeVisible();
   await page.getByRole('button', { name: 'Моё расписание' }).click();

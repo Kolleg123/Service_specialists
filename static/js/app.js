@@ -63,14 +63,17 @@ async function submitOperation(path, data) {
 
 function toast(message, type) {
  const node = $('#toast');
- const inferred = type || (/ошиб|не удалось|недоступ|не отвечает|нет связи|повторите|не удалось|не создан/i.test(String(message)) ? 'error' : 'success');
  node.textContent = message;
- node.dataset.type = inferred;
- node.setAttribute('role', inferred === 'error' ? 'alert' : 'status');
- node.setAttribute('aria-live', inferred === 'error' ? 'assertive' : 'polite');
+ node.dataset.type = type;
+ node.setAttribute('role', type === 'error' ? 'alert' : 'status');
+ node.setAttribute('aria-live', type === 'error' ? 'assertive' : 'polite');
+ if (node.showPopover && !node.matches(':popover-open')) node.showPopover();
  node.classList.add('show');
  clearTimeout(toast.timer);
- toast.timer = setTimeout(() => node.classList.remove('show'), 4500);
+ toast.timer = setTimeout(() => {
+  node.classList.remove('show');
+  node.hidePopover?.();
+ }, 4500);
 }
 function modal(html) {$('#modal-content').innerHTML = html; if (!$('#modal').open) $('#modal').showModal();}
 function closeModal() {
@@ -78,9 +81,11 @@ function closeModal() {
 }
 function updateAccount() {
  const user = state.user;
+ $('#logout').hidden = !user;
+ $('#account').setAttribute('aria-label', user ? 'Профиль — ' + user.name : 'Личный кабинет');
  const avatar = user?.avatar ? `<img class="avatar avatar-img" src="${esc(user.avatar)}" alt="">` :
   `<span class="avatar">${esc(user?.name[0])}</span>`;
- $('#account').innerHTML = user ? `${esc(user.name.split(' ')[0])} ${avatar}` : 'Личный кабинет <span>↗</span>';
+ $('#account').innerHTML = user ? `<span class="account-name">${esc(user.name.split(' ')[0])}</span> ${avatar}` : 'Личный кабинет <span>↗</span>';
 }
 function endSession({csrf}) {
  stopNotificationPolling();
@@ -108,12 +113,12 @@ function card({specialist: s, service, price, category}) {
  return `<article class="specialist-card"><button class="photo-button" ${profileAttributes} aria-label="Профиль: ${esc(s.name)}"><img src="${esc(s.photo)}" alt="Фото специалиста ${esc(s.name)}" loading="lazy">${category ? `<span class="photo-label">${esc(category)}</span>` : ''}<span class="photo-arrow">↗</span></button><div class="card-body"><div class="rating">★ <b>${s.rating ?? 'Новый'}</b><span>${s.reviews.length ? reviewCount(s.reviews.length) : 'Пока без отзывов'}</span></div><button class="name-link" ${profileAttributes}>${esc(s.name)}</button><p class="profession">${esc(s.profession)} <span>· ${s.experience} лет опыта</span></p><p class="location">⌖ ${esc(s.location)}</p><div class="tags">${s.skills.split(',').slice(0,2).map(x => `<span>${esc(x)}</span>`).join('')}</div><div class="card-bottom"><div><small>Стоимость услуг</small><strong>от ${money(price)}</strong></div><button class="button pale" ${profileAttributes}>Выбрать время <span>↗</span></button></div></div></article>`;
 }
 function catalog() {
- $('#app').innerHTML = `<section class="hero"><div class="hero-text"><span class="eyebrow"><i></i> ХОРОШИЕ СПЕЦИАЛИСТЫ РЯДОМ</span><h1>Нужный человек.<br><em>В удобное время.</em></h1><p>От ремонта крана до нового увлечения — найдите своего<br class="desktop"> специалиста и запишитесь без лишних звонков.</p><form id="search-form" class="search-box"><span>⌕</span><input id="search-input" placeholder="Какая помощь вам нужна?" aria-label="Поиск специалистов" value="${esc(state.query)}"><button class="button">Найти <span>↗</span></button></form><div class="popular">Например: <button data-query="Сантехник">сантехник</button><button data-query="Стрижка">стрижка</button><button data-query="Английский">английский</button></div><div class="hero-proof"><div class="mini-faces">${state.specialists.slice(0,3).map(s=>`<img src="${s.photo}" alt="">`).join('')}</div><div><strong>Меньше поисков. Больше жизни.</strong><span>Свободные слоты и понятные цены</span></div></div></div><div class="hero-art"><img src="/static/photos/hero.jpg" alt="Стилист работает над причёской клиента в салоне"><span class="art-caption">Хорошая работа<br>начинается с человека.</span><div class="float-card"><span class="check-round">✓</span><div><strong>Всё складывается</strong><span>Выбирайте время — остальное за нами</span></div><span>✧</span></div><div class="art-top">СВОБОДНО ДЛЯ ВАШИХ ПЛАНОВ <span>↗</span></div></div></section>
+ $('#app').innerHTML = `<section class="hero"><div class="hero-text"><h1>Нужный человек.<br><em>В удобное время.</em></h1><p>От ремонта крана до нового увлечения — найдите своего<br class="desktop"> специалиста и запишитесь без лишних звонков.</p><form id="search-form" class="search-box"><span>⌕</span><input id="search-input" placeholder="Какая помощь вам нужна?" aria-label="Поиск специалистов" value="${esc(state.query)}"><button class="button">Найти <span>↗</span></button></form><div class="popular">Например: <button data-query="Сантехник">сантехник</button><button data-query="Стрижка">стрижка</button><button data-query="Английский">английский</button></div><a class="text-button hero-catalog-link" href="#catalog-section">Перейти к каталогу ↓</a></div><div class="hero-art"><img src="/static/photos/hero.jpg" alt="Стилист работает над причёской клиента в салоне"></div></section>
  <section class="catalog-section" id="catalog-section"><div class="section-title"><div><span class="eyebrow">НАЙДИТЕ СВОЕГО</span><h2>Специалисты, которым по пути с вами</h2></div><span class="catalog-count"></span></div><div class="filter-bar"><div class="filters"><label><span>Направление</span><select id="direction-filter"></select></label><label><span>Категория</span><select id="category-filter"></select></label><label><span>Формат</span><select id="mode-filter"><option value="">Любой формат</option>${['Выезд','У специалиста','Онлайн','Группа'].map(m=>`<option ${state.mode===m?'selected':''}>${m}</option>`).join('')}</select></label><label><span>Цена до</span><select id="price-filter"><option value="">Любая цена</option>${[1500,2500,5000].map(n=>`<option value="${n}" ${state.maxPrice==n?'selected':''}>${money(n)}</option>`).join('')}</select></label><button id="reset-filter" class="text-button">Сбросить</button></div><label class="sort-label">Сначала <select id="sort-filter"><option value="recommended">рекомендуемые</option><option value="price">недорогие</option><option value="rating">с высоким рейтингом</option><option value="experience">опытные</option></select></label></div><div id="cards" class="card-grid"></div></section>
  <section class="help-banner"><div class="help-symbol">✧</div><div><h2>Не знаете, кого выбрать?</h2><p>Опишите задачу — наш помощник подскажет, к кому обратиться.</p></div><button class="button light" id="banner-chat">Спросить помощника ↗</button></section>
  <section class="how" id="how-section"><div><span class="eyebrow">ВСЁ ПРОСТО</span><h2>От задачи до встречи —<br>три шага</h2></div>${[['01','Найдите специалиста','Выберите категорию, сравните услуги и прочитайте отзывы.'],['02','Выберите время','Только доступные слоты. Дата, время и стоимость — сразу перед вами.'],['03','Занимайтесь своим','Ваша запись в личном кабинете. Планы изменились? Её можно отменить.']].map(([n,t,p])=>`<article><span>${n}</span><h3>${t}</h3><p>${p}</p></article>`).join('')}</section>`;
  $('#sort-filter').value = state.sort;
- $('#search-form').onsubmit = async e => {e.preventDefault(); state.query = $('#search-input').value.trim(); drawCards(); if (['client','master'].includes(state.user?.role) && state.query) {try {await api('/searches',{query:state.query});} catch(e){toast(e.message);}} $('#catalog-section').scrollIntoView({behavior:'smooth'});};
+ $('#search-form').onsubmit = async e => {e.preventDefault(); state.query = $('#search-input').value.trim(); drawCards(); if (['client','master'].includes(state.user?.role) && state.query) {try {await api('/searches',{query:state.query});} catch(e){toast(e.message, 'error');}} $('#catalog-section').scrollIntoView({behavior:'smooth'});};
  $$('[data-query]').forEach(b=>b.onclick=()=>{$('#search-input').value=b.dataset.query; $('#search-form').requestSubmit();});
  bindCatalogCategories();
  $('#mode-filter').onchange=e=>{state.mode=e.target.value;drawCards();};
@@ -121,6 +126,10 @@ function catalog() {
  $('#sort-filter').onchange=e=>{state.sort=e.target.value;drawCards();};
  $('#reset-filter').onclick=()=>{state.categoryGroup='';state.category='';state.mode='';state.maxPrice='';state.query='';catalog();};
  $('#banner-chat').onclick=openChat;
+ $('.hero-catalog-link').onclick = event => {
+  event.preventDefault();
+  $('#catalog-section').scrollIntoView();
+ };
  $('#catalog-section').insertBefore(chatLauncher,$('.filter-bar'));
  drawCards();
 }
@@ -157,7 +166,7 @@ function drawCards() {
 function bindProfiles(root=document) {
  $$('[data-profile]', root).forEach(button => button.onclick = () =>
   profile(Number(button.dataset.profile), Number(button.dataset.preferredService))
-   .catch(error => toast(error.message)));
+   .catch(error => toast(error.message, 'error')));
 }
 function requestPasswordReset() {
  modal('<span class="eyebrow">ВОССТАНОВЛЕНИЕ ДОСТУПА</span><h2>Забыли пароль?</h2><p class="muted">Укажите почту, связанную с аккаунтом. Если адрес зарегистрирован, мы отправим инструкцию.</p><form id="reset-request-form"><label class="field">Электронная почта<input name="email" type="email" autocomplete="email" required maxlength="120"></label><p class="form-error" role="alert"></p><button class="button full">Отправить ссылку →</button></form>');
@@ -276,7 +285,7 @@ function bindNotifications(user) {
     await notificationRequests.get(sessionToken)?.catch(() => {});
     await load();
    } catch (error) {
-    toast(error.message);
+    toast(error.message, 'error');
    } finally {
     button.disabled = false;
    }
@@ -296,7 +305,7 @@ function bindNotifications(user) {
    if(!isCurrent())return;
    render();
    const failure=results.find(result=>result.status==='rejected');
-   if(failure)toast(failure.reason.message);
+   if(failure)toast(failure.reason.message, 'error');
    if(!panel.classList.contains('hidden'))toggle.focus();
   } finally {busy=false;}
  };
@@ -324,17 +333,17 @@ function bookingActions(booking) {
  const buttons = [];
  if (booking.payment) {
   const {status, can_pay} = booking.payment;
-  buttons.push(`<span class="payment-state payment-${esc(status)}"><span class="payment-state-label">Оплата</span><strong>${esc(paymentLabels[status] || 'Статус уточняется')}</strong></span>`);
-  if (can_pay) {
+  buttons.push(`<span class="payment-state payment-${esc(status)}"><span class="payment-state-label">Тестовая оплата</span><strong>${esc(paymentLabels[status] || 'Статус уточняется')}</strong></span>`);
+  if (can_pay && booking.status === 'confirmed') {
    const label = {creating:'Проверить платёж', pending:'Продолжить оплату', canceled:'Повторить оплату', failed:'Повторить оплату'};
-   buttons.push(`<button data-pay="${booking.id}" class="button pale">${label[status] || 'Оплатить'}</button>`);
+   buttons.push(`<button data-pay="${booking.id}" class="button">${label[status] || 'Оплатить'}</button>`);
   }
  }
  if (booking.actions.cancel) buttons.push(`<button data-cancel="${booking.id}" class="text-button danger">Отменить запись</button>`);
  if (booking.actions.complete) buttons.push(`<button class="button pale" data-complete="${booking.id}">Завершить встречу</button>`);
  if (booking.actions.review) buttons.push(`<button data-review="${booking.id}" class="button pale">Оставить отзыв</button>`);
  const reasons = Object.values(booking.action_reasons).map(reason => `<p class="action-reason">${esc(reason)}</p>`).join('');
- return `<div class="booking-total-price"><small>Итого к оплате</small><strong>${money(booking.total)}</strong></div>${buttons.join('')}${reasons}`;
+ return `<div class="booking-total-price"><small>Стоимость записи</small><strong>${money(booking.total)}</strong></div>${buttons.join('')}${reasons}`;
 }
 let serviceApplicationFilter = 'pending';
 const defaultAdminFilters = {'review-filter':'pending', 'specialist-visibility':'all', 'service-visibility':'all'};
@@ -351,7 +360,7 @@ function bindAdminFilter(root, id) {
  const filter = $('#' + id, root);
  filter.onchange = () => {
   adminFilters[id] = filter.value;
-  dashboard().then(() => $('#' + id)?.focus()).catch(error => toast(error.message));
+  dashboard().then(() => $('#' + id)?.focus()).catch(error => toast(error.message, 'error'));
  };
 }
 
@@ -426,7 +435,7 @@ async function renderDashboard(background) {
   schedule:'/master', services:'/master', people:'/admin',
   'specialist-applications':'/admin/specialist-applications',
   'service-applications':'/admin/service-applications?status=' + serviceApplicationFilter,
-  support:'/support', categories:'/admin/categories'
+  support:'/support', categories:'/admin/categories', audit:'/admin/audit'
  }[tab];
  const [data, section] = await Promise.all([
   api(mode==='client' ? '/dashboard?mode=client' : '/dashboard'),
@@ -465,7 +474,7 @@ async function renderDashboard(background) {
    }
   }
   if ($('#modal[open], #support-dialog[open]') ||
-      previousRoot.querySelector('form[data-dirty], form :is(input,textarea,select):focus, form button:disabled')) return;
+      previousRoot.querySelector('form[data-dirty], form :is(input,textarea,select):focus, .select-trigger:focus, .select-trigger[aria-expanded=true], form button:disabled')) return;
  }
  dashboardSnapshot = snapshot;
  const openApplications = new Set($$('details[open][data-application-key]', previousRoot ?? document)
@@ -477,7 +486,7 @@ async function renderDashboard(background) {
  const isMaster=hasSpecialistProfile && !isClient;
  if (hasSpecialistProfile) dashboardMode=mode;
  const tabs=isClient?[['bookings','Мои записи'],['searches','История поиска'],['reviews','Мои отзывы']]:isMaster?[['bookings','Записи клиентов'],['schedule','Моё расписание'],['services','Мои услуги']]:[['bookings','Все записи'],['moderation','Модерация отзывов'],['service-applications','Заявки на услуги'],['specialist-applications','Заявки специалистов'],['people','Специалисты и услуги']];
- if (isAdmin) tabs.push(['support','Обращения'], ['categories','Категории услуг']);
+ if (isAdmin) tabs.push(['support','Обращения'], ['categories','Категории услуг'], ['audit','Журнал действий']);
  else tabs.push(['support','Поддержка'], ['profile','Профиль']);
  const application=data.specialist_application;
  if (isClient && (!hasSpecialistProfile || application)) {
@@ -490,16 +499,15 @@ async function renderDashboard(background) {
  </div>` : '';
  if(!tabs.some(x=>x[0]===dashboardTab))dashboardTab='bookings';
  const notificationControl=`<div class="notification-control"><button id="notifications-toggle" class="button outline notification-trigger" aria-label="Уведомления" aria-expanded="false" aria-controls="notifications-panel"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 9a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9M10 21h4"/></svg><span>Уведомления</span><span class="notification-count hidden" aria-hidden="true"></span></button><div id="notifications-panel" class="notification-panel hidden" aria-label="Список уведомлений"></div></div>`;
- $('#app').innerHTML=`<section class="dashboard"><div class="dashboard-heading"><div><span class="eyebrow">${isClient?'ЛИЧНЫЙ КАБИНЕТ':isMaster?'КАБИНЕТ СПЕЦИАЛИСТА':'АДМИНИСТРИРОВАНИЕ'}</span><h1>Здравствуйте, ${esc(user.name.split(' ')[0])}<span class="wave">✧</span></h1><p class="muted">${isClient?'Встречи, которые делают жизнь проще.':isMaster?'Ваше время, ваши услуги и ваши клиенты.':'Управляйте качеством сервиса и публикациями.'}</p></div><div class="dashboard-actions">${modeControl}<div class="dashboard-account-chip"><span class="dashboard-account-avatar">${esc(user.name.trim().charAt(0).toUpperCase())}</span><span class="dashboard-account-name">${esc(user.name.split(' ')[0])}</span></div>${notificationControl}<button id="logout" class="button outline logout-button"><span aria-hidden="true">↗</span> Выйти</button></div></div><div class="stats"><div><span>${isClient?'Предстоящих встреч':'Активных записей'}</span><strong>${data.bookings.filter(b=>isClient?b.phase==='upcoming':b.status==='confirmed').length}</strong></div><div><span>Завершённых встреч</span><strong>${data.bookings.filter(b=>b.status==='completed').length}</strong></div><div><span>${isAdmin?'На модерации':'Всего записей'}</span><strong>${isAdmin?data.reviews.filter(r=>r.status==='pending').length:data.bookings.length}</strong></div></div><div class="dashboard-tabs">${tabs.map(([id,t])=>`<button data-tab="${id}" class="${dashboardTab===id?'selected':''}">${t}${id in data.pending ? `<span aria-hidden="true" data-pending-tab="${id}">${data.pending[id] ? ` (${data.pending[id]})` : ''}</span>` : ''}</button>`).join('')}</div><div id="dashboard-content"></div></section>`;
- $('#logout').onclick = async () => endSession(await api('/logout', {}));
+ $('#app').innerHTML=`<section class="dashboard"><div class="dashboard-heading"><div><span class="eyebrow">${isClient?'ЛИЧНЫЙ КАБИНЕТ':isMaster?'КАБИНЕТ СПЕЦИАЛИСТА':'АДМИНИСТРИРОВАНИЕ'}</span><h1>Здравствуйте, ${esc(user.name.split(' ')[0])}<span class="wave">✧</span></h1><p class="muted">${isClient?'Встречи, которые делают жизнь проще.':isMaster?'Ваше время, ваши услуги и ваши клиенты.':'Управляйте качеством сервиса и публикациями.'}</p></div><div class="dashboard-actions">${modeControl}${notificationControl}</div></div><div class="stats"><div><span>${isClient?'Предстоящих встреч':'Активных записей'}</span><strong>${data.bookings.filter(b=>isClient?b.phase==='upcoming':b.status==='confirmed').length}</strong></div><div><span>Завершённых встреч</span><strong>${data.bookings.filter(b=>b.status==='completed').length}</strong></div><div><span>${isAdmin?'На модерации':'Всего записей'}</span><strong>${isAdmin?data.reviews.filter(r=>r.status==='pending').length:data.bookings.length}</strong></div></div><div class="dashboard-tabs">${tabs.map(([id,t])=>`<button data-tab="${id}" class="${dashboardTab===id?'selected':''}">${t}${id in data.pending ? `<span aria-hidden="true" data-pending-tab="${id}">${data.pending[id] ? ` (${data.pending[id]})` : ''}</span>` : ''}</button>`).join('')}</div><div id="dashboard-content"></div></section>`;
  if (hasSpecialistProfile) $$('[data-dashboard-mode]').forEach(button => button.onclick = () => {
   if (button.dataset.dashboardMode === dashboardMode) return;
   dashboardMode=button.dataset.dashboardMode;
   dashboardTab='bookings';
   dashboardStatusFilter='all';
-  dashboard().catch(error=>toast(error.message));
+  dashboard().catch(error=>toast(error.message, 'error'));
  });
- $$('[data-tab]').forEach(b=>b.onclick=()=>{dashboardTab=b.dataset.tab;dashboard().catch(e=>toast(e.message));});
+ $$('[data-tab]').forEach(b=>b.onclick=()=>{dashboardTab=b.dataset.tab;dashboard().catch(e=>toast(e.message, 'error'));});
  if (notificationControlNode && $('#notifications-toggle')) {
   $('.notification-control').replaceWith(notificationControlNode);
  } else bindNotifications(user);
@@ -522,13 +530,13 @@ async function renderDashboard(background) {
       return `Отменено записей: ${result.cancelled}`;
      });
    } catch (error) {
-    toast(error.message);
+    toast(error.message, 'error');
    } finally {
     button.disabled = false;
    }
   };
   $('#booking-status').value=dashboardStatusFilter;
-  $('#refresh-bookings').onclick=async()=>{try{await dashboard();$('#dashboard-update-status').textContent='Статусы обновлены';$('#refresh-bookings').focus();}catch(error){toast(error.message);}};
+  $('#refresh-bookings').onclick=async()=>{try{await dashboard();$('#dashboard-update-status').textContent='Статусы обновлены';$('#refresh-bookings').focus();}catch(error){toast(error.message, 'error');}};
   const draw=()=>{
    const rows=data.bookings.filter(b=>$('#booking-status').value==='all'||b.status===$('#booking-status').value);
    $('#booking-list').innerHTML=rows.length?rows.map(b=>`<article class="booking-row" data-booking-id="${b.id}"><img src="${esc(b.photo)}" alt=""><div class="booking-info"><span class="badge ${b.status} ${b.phase}">${esc(b.status_label)}</span><h3>${esc(b.service)}</h3><p>${esc(b.specialist)}${!isClient?' · Клиент: '+esc(b.client):''}</p><p><b>${date(b.starts_at)}${b.booking_mode==='day'?'':` · ${time(b.starts_at)}–${b.starts_at.slice(0,10)===b.ends_at.slice(0,10)?'':date(b.ends_at)+' · '}${time(b.ends_at)}`}</b> · ${b.duration} мин · ${esc(b.mode)} · ${b.quantity} мест(о)</p>${bookedVisitDetails(b)}${b.note?`<p class="muted">${esc(b.note)}</p>`:''}${b.cancel_reason ? `<p>Причина отмены: ${esc(b.cancel_reason)}</p>` : ''}</div><div class="booking-actions">${bookingActions(b)}</div></article>`).join(''):'<div class="empty"><span>▦</span><h3>Здесь пока нет записей</h3><p>Выберите специалиста и удобное время в каталоге.</p><a class="button" href="#catalog">Найти специалиста ↗</a></div>';
@@ -541,10 +549,11 @@ async function renderDashboard(background) {
       location.assign(payment.confirmation_url);
       return;
      }
-     toast(paymentLabels[payment.status] || 'Проверяем состояние платежа');
+     const types = {succeeded:'success', failed:'error', canceled:'warning'};
+     toast(paymentLabels[payment.status] || 'Проверяем состояние платежа', types[payment.status] || 'info');
      await dashboard();
     } catch (error) {
-     toast(error.message);
+     toast(error.message, 'error');
     } finally {
      button.disabled = false;
     }
@@ -560,7 +569,7 @@ async function renderDashboard(background) {
       return 'Запись отменена, место освобождено';
      });
    });
-   $$('[data-complete]').forEach(b=>b.onclick=async()=>{b.disabled=true;try{await api('/bookings/'+b.dataset.complete+'/complete',{});toast('Встреча завершена');}catch(e){toast(e.message);}finally{await dashboard();}});
+   $$('[data-complete]').forEach(b=>b.onclick=async()=>{b.disabled=true;try{await api('/bookings/'+b.dataset.complete+'/complete',{});toast('Встреча завершена', 'success');}catch(e){toast(e.message, 'error');}finally{await dashboard();}});
    $$('[data-review]').forEach(b=>b.onclick=()=>reviewForm(Number(b.dataset.review)));
   };$('#booking-status').onchange=()=>{dashboardStatusFilter=$('#booking-status').value;draw();};draw();
  }else if(dashboardTab==='searches'){
@@ -572,15 +581,15 @@ async function renderDashboard(background) {
   root.innerHTML=`<h2>${isAdmin?'Отзывы и модерация':'Мои отзывы'}</h2>` +
    (isAdmin ? adminFilter('review-filter', 'Статус отзыва',
     [['pending','На модерации'],['approved','Опубликованные'],['rejected','Отклонённые'],['all','Все']]) : '') +
-   (reviews.length?reviews.map(r=>`<article class="review panel"><div><strong>${esc(r.specialist)}</strong><span class="stars">${'★'.repeat(r.rating)}</span></div><p>${esc(r.content)}</p><small>${esc(r.author)} · ${date(r.created_at)} · ${reviewStatuses[r.status]}</small>${isAdmin?`<div class="dialog-actions"><button data-moderate="${r.id}" data-status="approved" class="button pale" ${r.status==='approved'?'disabled':''}>Опубликовать</button><button data-moderate="${r.id}" data-status="rejected" class="button outline" ${r.status==='rejected'?'disabled':''}>Отклонить</button></div>`:''}</article>`).join(''): `<div class="empty">${isAdmin ? 'Отзывов с этим статусом нет.' : 'Отзывов пока нет. Клиент может оставить отзыв после завершённой встречи.'}</div>`);
+   (reviews.length?reviews.map(r=>`<article class="review panel"><div><strong>${esc(r.specialist)}</strong><span class="stars">${'★'.repeat(r.rating)}</span></div><p>${esc(r.content)}</p><div class="review-meta"><small>${esc(r.author)} · ${date(r.created_at)}</small><span class="badge ${esc(r.status)}">${reviewStatuses[r.status]}</span></div>${isAdmin?`<div class="dialog-actions"><button data-moderate="${r.id}" data-status="approved" class="button pale" ${r.status==='approved'?'disabled':''}>Опубликовать</button><button data-moderate="${r.id}" data-status="rejected" class="button outline" ${r.status==='rejected'?'disabled':''}>Отклонить</button></div>`:''}</article>`).join(''): `<div class="empty">${isAdmin ? 'Отзывов с этим статусом нет.' : 'Отзывов пока нет. Клиент может оставить отзыв после завершённой встречи.'}</div>`);
   if (isAdmin) bindAdminFilter(root, 'review-filter');
-  $$('[data-moderate]').forEach(b=>b.onclick=async()=>{try{await api('/admin/moderate',{kind:'review',id:Number(b.dataset.moderate),status:b.dataset.status});await refreshCatalog();await dashboard();toast('Статус отзыва обновлён');}catch(e){toast(e.message);}});
+  $$('[data-moderate]').forEach(b=>b.onclick=async()=>{try{await api('/admin/moderate',{kind:'review',id:Number(b.dataset.moderate),status:b.dataset.status});await refreshCatalog();await dashboard();toast('Статус отзыва обновлён', 'success');}catch(e){toast(e.message, 'error');}});
  }else if(dashboardTab==='profile'){
   renderAccountProfile(root, user);
  }else if(dashboardTab==='schedule'||dashboardTab==='services'){
   const m=section;
   if(dashboardTab==='schedule'){
-   root.innerHTML=`<div class="section-title"><div><h2>Свободные слоты</h2><p class="muted">Время Кирова (UTC+3). Пересекающиеся интервалы недоступны.</p></div></div><form id="slot-form" class="panel form-grid"><label class="field">Услуга<select name="service_id">${m.services.filter(s=>s.active).map(s=>`<option value="${s.id}" data-mode="${s.mode}">${esc(s.title)} · ${s.duration} мин</option>`).join('')}</select></label><label class="field">Дата и время<input type="datetime-local" name="starts_at" min="${localNow()}" required></label><label class="field">Количество мест<input type="number" name="capacity" min="1" max="50" value="1" required></label><button class="button">Добавить слот +</button><p class="form-error" role="alert"></p></form><div class="schedule-list">${m.slots.length?m.slots.map(s=>`<article class="schedule-row ${!s.active?'inactive':''}"><div><strong>${date(s.starts_at)} · ${time(s.starts_at)}</strong><p>${esc(s.service)}</p></div><span>${s.booked} / ${s.capacity} мест занято</span>${s.active?`<button data-close-slot="${s.id}" class="button outline">Закрыть слот</button>`:'<span class="muted">Закрыт</span>'}</article>`).join(''):'<div class="empty">Добавьте первый слот в своё расписание.</div>'}</div>`;
+   root.innerHTML=`<div class="section-title"><div><h2>Свободные слоты</h2><p class="muted">Время Кирова (UTC+3). Пересекающиеся интервалы недоступны.</p></div></div><form id="slot-form" class="panel form-grid"><label class="field">Услуга<select name="service_id" required>${m.services.filter(s=>s.active).map(s=>`<option value="${s.id}" data-mode="${s.mode}">${esc(s.title)} · ${s.duration} мин</option>`).join('')}</select></label><label class="field">Дата и время<input type="datetime-local" name="starts_at" min="${localNow()}" required></label><label class="field">Количество мест<input type="number" name="capacity" min="1" max="50" value="1" required></label><button class="button" type="submit" ${m.services.some(service => service.active) ? '' : 'disabled'}>Добавить слот +</button><p class="form-error" role="alert"></p></form><div class="schedule-list">${m.slots.length?m.slots.map(s=>`<article class="schedule-row ${!s.active?'inactive':''}"><div><strong>${date(s.starts_at)} · ${time(s.starts_at)}</strong><p>${esc(s.service)}</p></div><span>${s.booked} / ${s.capacity} мест занято</span>${s.active?`<button data-close-slot="${s.id}" class="button outline">Закрыть слот</button>`:'<span class="muted">Закрыт</span>'}</article>`).join(''):'<div class="empty">Добавьте первый слот в своё расписание.</div>'}</div>`;
    root.insertAdjacentHTML('afterbegin', scheduleForm(m.schedule));
    bindScheduleForm();
    $('#slot-form').classList.toggle('hidden', Boolean(m.schedule));
@@ -590,7 +599,7 @@ async function renderDashboard(background) {
    const capacity=()=>{const group=form.elements.service_id.selectedOptions[0]?.dataset.mode==='Группа';form.elements.capacity.max=group?'50':'1';if(!group)form.elements.capacity.value=1;};form.elements.service_id.onchange=capacity;capacity();
    form.onsubmit = async event => {
     event.preventDefault();
-    const button = $('button', form);
+    const button = $('button:not([type]),button[type=submit]', form);
     if (button.disabled) return;
     const data = Object.fromEntries(new FormData(form));
     data.service_id = Number(data.service_id);
@@ -599,18 +608,20 @@ async function renderDashboard(background) {
     try {
      await submitOperation('/master/slots', data);
      form.reset();
-     toast('Слот добавлен');
-     dashboard().catch(error => toast(error.message));
+     toast('Слот добавлен', 'success');
+     dashboard().catch(error => toast(error.message, 'error'));
     } catch (error) {
      $('.form-error', form).textContent = error.message;
     } finally {
      button.disabled = false;
     }
    };
-   $$('[data-close-slot]').forEach(b=>b.onclick=async()=>{try{await api('/master/slots/'+b.dataset.closeSlot+'/close',{});await dashboard();toast('Слот закрыт');}catch(e){toast(e.message);}});
+   $$('[data-close-slot]').forEach(b=>b.onclick=async()=>{try{await api('/master/slots/'+b.dataset.closeSlot+'/close',{});await dashboard();toast('Слот закрыт', 'success');}catch(e){toast(e.message, 'error');}});
   }else{
    renderManagedServices(root, m.services, m.categories);
   }
+ }else if(dashboardTab==='audit'){
+  renderAuditLog(root, section.entries);
  }else if(dashboardTab==='support'){
   renderSupport(root, section.items, isAdmin);
  }else if(dashboardTab==='categories'){
@@ -628,15 +639,14 @@ async function renderDashboard(background) {
    <option value="all">Все</option></select></label>` + (applications.length ? applications.map(service => `
    <details class="panel moderation-card" data-application-key="service-${service.id}">
     <summary><span class="moderation-card-title"><strong>${service.draft_status ? 'Изменения: ' : ''}${esc(service.title)}</strong><span class="badge ${service.application_status}">${serviceStatus[service.application_status]}</span></span>
-     <span class="moderation-card-meta">${esc(service.specialist)} · ${service.category_name ? esc(service.category_name) : 'Без категории'}</span>
-     <span class="moderation-card-date">Заявка от ${date(service.created_at)}</span></summary>
-    <div class="moderation-preview"><span class="eyebrow">ПРЕДПРОСМОТР УСЛУГИ</span><h3>${esc(service.title)}</h3>
+     <span class="moderation-card-meta">${esc(service.specialist)} · ${service.category_name ? esc(service.category_name) : 'Без категории'}</span></summary>
+    <div class="moderation-preview"><h3>Условия оказания услуги</h3>
      <p>${service.category_name ? `${esc(service.category_direction)} / ${esc(service.category_name)}` : 'Категория не указана'}</p>
      <strong>${money(service.price)}</strong><span>${esc(service.mode)} · ${service.duration} мин</span></div>
-    ${bookedVisitDetails(service)}
+    ${service.contact_phone || service.service_address || service.contact_instructions ? `<div class="moderation-visit">${bookedVisitDetails(service)}</div>` : ''}
     ${service.application_status === 'rejected' ? `<p>Причина: ${esc(service.draft_reason ?? service.moderation_reason)}</p>` : ''}
     ${service.application_status === 'pending' ? `<form data-service-decision="${service.id}" data-revision="${service.revision}">
-     <label class="field">Причина отклонения<textarea name="reason" maxlength="500"></textarea></label>
+     <label class="field">Причина отклонения<textarea name="reason" maxlength="500" placeholder="Что специалисту нужно исправить?"></textarea></label>
      <p class="form-error" role="alert"></p>
      <div class="dialog-actions moderation-actions">
       <button value="approved" class="button moderation-approve">Одобрить услугу</button>
@@ -648,20 +658,26 @@ async function renderDashboard(background) {
   filter.value = serviceApplicationFilter;
   filter.onchange = () => {
    serviceApplicationFilter = filter.value;
-   dashboard().then(() => $('#service-application-filter')?.focus()).catch(error => toast(error.message));
+   dashboard().then(() => $('#service-application-filter')?.focus()).catch(error => toast(error.message, 'error'));
   };
   $$('[data-service-decision]', root).forEach(form => form.onsubmit = async event => {
    event.preventDefault();
    const status = event.submitter?.value;
    if (!status) return;
+   const reason = form.elements.reason.value.trim();
+   if (status === 'rejected' && !reason) {
+    $('.form-error', form).textContent = 'Укажите причину отклонения';
+    form.elements.reason.focus();
+    return;
+   }
    const buttons = $$('button', form);
    buttons.forEach(button => button.disabled = true);
    try {
     await api(`/admin/service-applications/${form.dataset.serviceDecision}/decision`, {
-     status, reason: form.elements.reason.value, revision: Number(form.dataset.revision)
+     status, reason, revision: Number(form.dataset.revision)
     });
     await dashboard();
-    toast('Решение сохранено');
+    toast('Решение сохранено', 'success');
    } catch (error) {
     $('.form-error', form).textContent = error.message;
    } finally {
@@ -694,7 +710,7 @@ async function renderDashboard(background) {
     </article>`).join('') : '<div class="empty">По выбранным фильтрам ничего не найдено.</div>');
   bindAdminFilter(root, 'specialist-visibility');
   bindAdminFilter(root, 'service-visibility');
-  $$('[data-toggle]').forEach(b=>b.onclick=async()=>{try{await api('/admin/moderate',{kind:b.dataset.toggle,id:Number(b.dataset.id),active:b.dataset.active==='true'});await refreshCatalog();await dashboard();toast('Изменения сохранены');}catch(e){toast(e.message);}});
+  $$('[data-toggle]').forEach(b=>b.onclick=async()=>{try{await api('/admin/moderate',{kind:b.dataset.toggle,id:Number(b.dataset.id),active:b.dataset.active==='true'});await refreshCatalog();await dashboard();toast('Изменения сохранены', 'success');}catch(e){toast(e.message, 'error');}});
   $$('[data-delete-specialist]', root).forEach(button => button.onclick = () => {
    managementConfirmation('Удалить специалиста?',
     'Профиль, услуги и расписание будут закрыты. Аккаунт клиента и история записей сохранятся.',
@@ -715,23 +731,66 @@ async function renderDashboard(background) {
   details.open = openApplications.has(details.dataset.applicationKey);
  }
 }
+function renderAuditLog(root, entries) {
+ const actions = {specialist_deleted:'Удаление специалиста', service_moderation:'Модерация услуги',
+  moderation:'Решение модерации', booking_transition:'Изменение статуса записи'};
+ const objects = {booking:'Запись', specialist:'Специалист', service:'Услуга', review:'Отзыв'};
+ const states = {...serviceStatus, confirmed:'Подтверждена', completed:'Завершена', cancelled:'Отменена'};
+ const describeState = raw => {
+  if (!raw) return '';
+  let state;
+  try { state = JSON.parse(raw); }
+  catch { return states[raw] || raw; }
+  const status = state?.draft_status || state?.moderation_status || state?.status;
+  if (status) return states[status] || status;
+  if (state?.deleted) return 'Профиль удалён';
+  return state?.active == null ? '' : state.active ? 'Показано в каталоге' : 'Скрыто из каталога';
+ };
+ root.innerHTML = '<h2>Журнал действий</h2>' + (entries.length ? `
+  <ul class="audit-log">${entries.map(entry => `<li class="panel">
+   <h3>${esc(actions[entry.action] ?? entry.action)}</h3>
+   <div class="audit-meta"><span>${esc(objects[entry.object_type] ?? entry.object_type)} №${entry.object_id}</span>
+    <span>${esc(entry.actor_name || 'Система')}</span>
+    <time datetime="${esc(entry.created_at.replace(' ', 'T'))}Z">${new Date(entry.created_at.replace(' ', 'T') + 'Z')
+     .toLocaleString('ru-RU', {timeZone:'Europe/Kirov', dateStyle:'medium', timeStyle:'short'})}</time></div>
+   <p>${esc(describeState(entry.new_state))}</p>
+   ${entry.reason ? `<p>${esc(entry.reason)}</p>` : ''}
+  </li>`).join('')}</ul>` : '<p class="empty">В журнале пока нет записей.</p>');
+}
+
 function reviewForm(booking_id){
  modal(`<h2>Как прошла встреча?</h2><p class="muted">Отзыв появится в профиле после проверки администратором.</p>
   <form id="review-form"><fieldset class="rating-picker"><legend>Ваша оценка</legend>
    <div class="rating-stars" role="radiogroup" aria-label="Оценка от 1 до 5">
-    ${[1,2,3,4,5].map(value=>`<button type="button" role="radio" aria-checked="${value===5}" data-rating="${value}" class="${value<=5?'selected':''}" aria-label="${value} из 5">★</button>`).join('')}
+    ${[1,2,3,4,5].map(value=>`<button type="button" role="radio" aria-checked="${value===5}" tabindex="${value===5?0:-1}" data-rating="${value}" class="selected" aria-label="${value} из 5">★</button>`).join('')}
    </div><input type="hidden" name="rating" value="5"><strong class="rating-caption">5 из 5 · Отлично</strong>
   </fieldset>
   <label class="field">Ваш отзыв<textarea name="content" minlength="5" maxlength="1500" required placeholder="Что вам понравилось? Что можно улучшить?"></textarea></label>
   <p class="form-error" role="alert"></p><button class="button full">Отправить отзыв →</button></form>`);
  const form=$('#review-form');
  const labels={1:'Очень плохо',2:'Плохо',3:'Нормально',4:'Хорошо',5:'Отлично'};
- $$('[data-rating]',form).forEach(button=>button.onclick=()=>{
-  const rating=Number(button.dataset.rating); form.elements.rating.value=rating;
-  $$('[data-rating]',form).forEach(star=>{const selected=Number(star.dataset.rating)<=rating;star.classList.toggle('selected',selected);star.setAttribute('aria-checked',String(Number(star.dataset.rating)===rating));});
-  $('.rating-caption',form).textContent=`${rating} из 5 · ${labels[rating]}`;
+ const stars = $$('[data-rating]', form);
+ const selectRating = rating => {
+  form.elements.rating.value = rating;
+  stars.forEach((star, index) => {
+   star.classList.toggle('selected', index < rating);
+   star.setAttribute('aria-checked', String(index + 1 === rating));
+   star.tabIndex = index + 1 === rating ? 0 : -1;
+  });
+  $('.rating-caption', form).textContent = `${rating} из 5 · ${labels[rating]}`;
+ };
+ stars.forEach((star, index) => {
+  star.onclick = () => selectRating(index + 1);
+  star.onkeydown = event => {
+   const offset = {ArrowLeft:-1, ArrowDown:-1, ArrowRight:1, ArrowUp:1}[event.key];
+   if (!offset) return;
+   event.preventDefault();
+   const next = (index + offset + stars.length) % stars.length;
+   selectRating(next + 1);
+   stars[next].focus();
+  };
  });
- form.onsubmit=async e=>{e.preventDefault();try{await api('/reviews',{booking_id,rating:Number(form.elements.rating.value),content:form.elements.content.value});closeModal();toast('Спасибо! Отзыв отправлен на модерацию');await dashboard();}catch(e){$('.form-error',form).textContent=e.message;}};
+ form.onsubmit=async e=>{e.preventDefault();try{await api('/reviews',{booking_id,rating:Number(form.elements.rating.value),content:form.elements.content.value});closeModal();toast('Спасибо! Отзыв отправлен на модерацию', 'success');await dashboard();}catch(e){$('.form-error',form).textContent=e.message;}};
 }
 function openChat(){$('#chat').classList.remove('hidden');chatLauncher.classList.add('hidden');$('#chat-input').focus();}
 $('#chat-launch').onclick=openChat;
@@ -742,8 +801,15 @@ $('#modal').addEventListener('cancel', event => {
  if ($('#modal form[data-pending-deletion]')) event.preventDefault();
 });
 $('#modal').onclick=e=>{if(e.target===$('#modal')){const r=$('#modal').getBoundingClientRect();if(e.clientX<r.left||e.clientX>r.right||e.clientY<r.top||e.clientY>r.bottom)closeModal();}};
-$('#account').onclick=()=>{if(state.user){location.hash='dashboard';dashboard().catch(e=>toast(e.message));}else login();};
-async function route(){const id=++catalogRequest;try{if(location.hash==='#dashboard'){await dashboard();}else{clearTimeout(dashboardRefreshTimer);stopNotificationPolling();await refreshCatalog();if(id!==catalogRequest)return;catalog();scheduleDashboardRefresh();if(location.hash==='#how')$('#how-section').scrollIntoView({behavior:'smooth'});}$$('[data-nav]').forEach(a=>a.classList.toggle('active',a.getAttribute('href')===(location.hash||'#catalog')));}catch(e){$('#chat').before(chatLauncher);$('#app').innerHTML=`<div class="empty" role="alert"><h2>Не удалось загрузить страницу</h2><p>${esc(e.message)}</p><button id="retry-page" class="button">Повторить загрузку</button></div>`;$('#retry-page').onclick=route;}}
+$('#logout').onclick = async event => {
+ const button = event.currentTarget;
+ button.disabled = true;
+ try { endSession(await api('/logout', {})); }
+ catch (error) { toast(error.message, 'error'); }
+ finally { button.disabled = false; }
+};
+$('#account').onclick=()=>{if(state.user){location.hash='dashboard';dashboard().catch(e=>toast(e.message, 'error'));}else login();};
+async function route(){const id=++catalogRequest;try{if(location.hash==='#dashboard'){await dashboard();}else{clearTimeout(dashboardRefreshTimer);stopNotificationPolling();await refreshCatalog();if(id!==catalogRequest)return;catalog();scheduleDashboardRefresh();if(location.hash==='#how')$('#how-section').scrollIntoView({behavior:'smooth'});if(location.hash==='#catalog-section')$('#catalog-section').scrollIntoView();}$$('[data-nav]').forEach(a=>a.classList.toggle('active',a.getAttribute('href')===(location.hash||'#catalog')));}catch(e){$('#chat').before(chatLauncher);$('#app').innerHTML=`<div class="empty" role="alert"><h2>Не удалось загрузить страницу</h2><p>${esc(e.message)}</p><button id="retry-page" class="button">Повторить загрузку</button></div>`;$('#retry-page').onclick=route;}}
 window.addEventListener('hashchange',route);
 (async()=>{try{const s=await api('/session');state.user=s.user;state.csrf=s.csrf;state.demoMode=s.demo_mode;
  if (state.demoMode) $('#site-mode').textContent = 'Демонстрационный проект · 2026. Примеры специалистов и отзывов вымышлены. Фото: Unsplash и Barber demo.';

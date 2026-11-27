@@ -18,10 +18,11 @@ function supportSender(item) {
 }
 
 function supportDetails(item) {
- return `<p class="support-text">${esc(item.description)}</p>
-  ${item.response ? `<h3>Ответ администратора</h3>
+ return `<section class="support-message"><h3>Обращение</h3>
+   <p class="support-text">${esc(item.description)}</p></section>
+  ${item.response ? `<section class="support-message support-reply"><h3>Ответ администратора</h3>
    <p class="muted">${esc(item.admin_name)} · ${supportDate(item.resolved_at)}</p>
-   <p class="support-text">${esc(item.response)}</p>` : ''}`;
+   <p class="support-text">${esc(item.response)}</p></section>` : ''}`;
 }
 
 function showSupportForm(title = '', serviceForm = null) {
@@ -54,7 +55,7 @@ function showSupportForm(title = '', serviceForm = null) {
     supportView.open.add(result.id);
     await dashboard();
    }
-   toast('Обращение отправлено');
+   toast('Обращение отправлено', 'success');
   } catch (error) {
    $('.form-error', form).textContent = error.message;
   } finally {
@@ -80,7 +81,7 @@ function openSupportFromNotice(item, admin) {
    row?.scrollIntoView({block: 'center'});
    $('summary', row ?? document)?.focus();
   } catch (error) {
-   toast(error.message);
+   toast(error.message, 'error');
   }
  };
 }
@@ -144,14 +145,15 @@ function supportRow(item, admin) {
  };
  row.innerHTML = `<summary><strong>${esc(item.title)}</strong> ${supportBadge(item.status)}
   <span class="muted support-meta">${admin ? `${supportSender(item)} · ` : ''}${supportDate(item.created_at)}</span></summary>
-  ${supportDetails(item)}
+  <div class="support-body">${supportDetails(item)}
   ${item.status === 'pending' ? (admin ? `
    <button class="button pale" data-show-response>Ответить</button>
    <form hidden><label class="field">Ответ администратора<textarea name="response" maxlength="3000" required></textarea></label>
     <div class="dialog-actions"><button class="button">Ответить и завершить</button>
      <button class="button outline" type="button" data-discard-response>Отмена</button></div>
     <p class="form-error" role="alert"></p></form>` :
-   '<button class="button outline" data-withdraw>Отозвать обращение</button>') : ''}`;
+   '<button class="button outline danger" data-withdraw>Отозвать обращение</button>') : ''}
+  </div>`;
  if (item.status !== 'pending') {
   supportView.drafts.delete(item.id);
   return row;
@@ -195,7 +197,7 @@ function supportRow(item, admin) {
    await api(`/support/${item.id}/resolve`, {response: response.value});
    supportView.drafts.delete(item.id);
    await dashboard();
-   toast('Ответ отправлен, обращение обработано');
+   toast('Ответ отправлен, обращение обработано', 'success');
   } catch (error) {
    $('.form-error', form).textContent = error.message;
   } finally {

@@ -4,7 +4,7 @@
   "version": "1.0.0",
   "scripts": {
     "test:e2e": "playwright test",
-    "check": "node --check static/js/app.js && node --check static/js/booking.js && node --check static/js/management.js && node --check static/js/service-categories.js && node --check static/js/specialist-registration.js && node --check static/js/support.js && node --check static/js/category-management.js && node --check static/js/profile.js",
+    "check": "node --check static/js/select-menu.js && node --check static/js/app.js && node --check static/js/booking.js && node --check static/js/management.js && node --check static/js/service-categories.js && node --check static/js/specialist-registration.js && node --check static/js/support.js && node --check static/js/category-management.js && node --check static/js/profile.js",
     "design:capture": "CAPTURE_DESIGN=1 playwright test tests/browser/design.spec.js"
   },
   "devDependencies": {

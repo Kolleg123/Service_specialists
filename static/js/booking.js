@@ -27,10 +27,14 @@ function scheduleForm(schedule) {
     </div>
     <fieldset id="schedule-days" class="weekday-picker"><legend>Рабочие дни</legend><p class="muted">Выберите дни, когда запись доступна клиентам</p><div>${WEEKDAYS.map((day,i) =>
       `<label><input type="checkbox" name="weekdays" value="${i+1}" ${(schedule?.weekdays || [1,2,3,4,5]).includes(i+1)?'checked':''}><span>${day}</span></label>`).join('')}</div></fieldset>
-    <label class="field">Начало работы<input type="time" name="opens_at" value="${esc(schedule?.opens_at || '09:00')}"></label>
-    <label class="field">Окончание работы<input type="time" name="closes_at" value="${esc(schedule?.closes_at || '18:00')}"></label>
-    <label class="field">Начало обеда<input type="time" name="lunch_start" value="${esc(schedule?.lunch_start)}"></label>
-    <label class="field">Окончание обеда<input type="time" name="lunch_end" value="${esc(schedule?.lunch_end)}"></label>
+    <fieldset id="schedule-hours" class="schedule-fields"><legend>Рабочие часы</legend>
+     <label class="field">Начало работы<input type="time" name="opens_at" value="${esc(schedule?.opens_at || '09:00')}"></label>
+     <label class="field">Окончание работы<input type="time" name="closes_at" value="${esc(schedule?.closes_at || '18:00')}"></label>
+    </fieldset>
+    <fieldset id="schedule-lunch" class="schedule-fields"><legend>Обеденный перерыв</legend>
+     <label class="field">Начало обеда<input type="time" name="lunch_start" value="${esc(schedule?.lunch_start)}"></label>
+     <label class="field">Окончание обеда<input type="time" name="lunch_end" value="${esc(schedule?.lunch_end)}"></label>
+    </fieldset>
     <label class="field">Дневной лимит<input type="number" name="daily_limit" min="1" max="50" value="${schedule?.daily_limit ?? 5}"></label>
     <button class="button">Сохранить расписание</button><p class="form-error" role="alert"></p>
   </form>`;
@@ -43,6 +47,8 @@ function bindScheduleForm() {
   const syncFields = () => {
     $('#schedule-days').disabled = mode.value === 'manual';
     $('#schedule-days').hidden = mode.value === 'manual';
+    $('#schedule-hours').hidden = mode.value === 'manual';
+    $('#schedule-lunch').hidden = mode.value !== 'time';
     for (const [name, enabled] of Object.entries({
       opens_at: mode.value !== 'manual', closes_at: mode.value !== 'manual',
       lunch_start: mode.value === 'time', lunch_end: mode.value === 'time', daily_limit: mode.value === 'day'
@@ -77,7 +83,7 @@ function bindScheduleForm() {
     try {
       await api('/master/schedule', data);
       await dashboard();
-      toast('Расписание сохранено');
+      toast('Расписание сохранено', 'success');
     } catch (error) {
       $('.form-error', form).textContent = error.message;
     }
@@ -91,7 +97,7 @@ async function profile(id, preferredServiceId) {
     const {specialists} = await api('/catalog');
     specialist = specialists.find(s => s.id === id);
   }
-  if (!specialist?.services.length) return toast('Специалист сейчас недоступен');
+  if (!specialist?.services.length) return toast('Специалист сейчас недоступен', 'warning');
   activeBooking = new BookingFlow(specialist, preferredServiceId);
   activeBooking.open();
 }
@@ -126,7 +132,7 @@ class BookingFlow {
   open() {
     const s = this.specialist;
     modal(`<section id="booking-flow" aria-label="Запись к специалисту">
-      <div class="profile-head"><img src="${esc(s.photo)}" alt="${esc(s.name)}"><div><span class="eyebrow">${esc(s.profession)}</span><h2>${esc(s.name)}</h2><p>${s.experience} лет опыта · ${reviewCount(s.reviews.length)}</p><p>${esc(s.location)}</p><p data-profile-category></p></div></div>
+      <div class="profile-head"><img src="${esc(s.photo)}" alt="${esc(s.name)}"><div><span class="eyebrow">${esc(s.profession)}</span><h2>${esc(s.name)}</h2><p class="profile-rating"><strong>${s.rating == null ? 'Новый специалист' : `★ ${s.rating}`}</strong> · ${reviewCount(s.reviews.length)}</p><p>${s.experience} лет опыта · ${esc(s.location)}</p><p data-profile-category></p></div></div>
       <nav class="booking-steps" aria-label="Этапы записи"></nav>
       <label class="field">Услуга<select id="booking-service">${s.services.map(v => `<option value="${v.id}">${esc(v.title)} · ${money(v.price)} · ${v.duration} мин</option>`).join('')}</select></label>
       <p class="muted" data-profile-service-category></p>
@@ -402,12 +408,12 @@ class BookingFlow {
       this.submitting = false;
     }
     if (this.alive) closeModal();
-    toast(`Вы записаны! Запись №${booking.id}. Подробности — в личном кабинете.`);
+    toast(`Вы записаны! Запись №${booking.id}. Подробности — в личном кабинете.`, 'success');
     state.newBookingId = booking.id;
     dashboardMode = 'client';
     dashboardTab = 'bookings';
     dashboardStatusFilter = 'all';
-    if (location.hash === '#dashboard') dashboard().catch(error => toast(error.message));
+    if (location.hash === '#dashboard') dashboard().catch(error => toast(error.message, 'error'));
     else location.hash = 'dashboard';
   }
 

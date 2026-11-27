@@ -90,7 +90,6 @@ test('specialist updates their public name and photo, and admin removes only the
   const photo = await accountAvatar.getAttribute('src');
   await expect(page.locator('#avatar-preview img')).toHaveAttribute('src', photo);
   await avatar.setInputFiles({name:'broken.png', mimeType:'image/png', buffer:Buffer.from('bad image')});
-  await page.getByRole('button', {name:'Сохранить фото'}).click();
   await expect(page.locator('#avatar-form [role=alert]')).toContainText('Не удалось открыть изображение');
   await expect(page.getByRole('button', {name:'Сохранить фото'})).toBeDisabled();
   await expect(accountAvatar).toHaveAttribute('src', photo);
