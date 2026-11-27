@@ -15,15 +15,26 @@ function serviceVisitDetails(service) {
 
 function scheduleForm(schedule) {
   return `<form id="weekly-schedule" class="panel form-grid">
-    <label class="field">Режим записи<select name="mode" data-current="${schedule?.mode || 'manual'}">
-      <option value="manual">Ручные слоты</option><option value="time">На конкретное время</option><option value="day">На день с лимитом</option>
-    </select></label>
-    <fieldset id="schedule-days"><legend>Рабочие дни</legend>${WEEKDAYS.map((day,i) =>
-      `<label><input type="checkbox" name="weekdays" value="${i+1}" ${(schedule?.weekdays || [1,2,3,4,5]).includes(i+1)?'checked':''}>${day} </label>`).join('')}</fieldset>
-    <label class="field">Начало работы<input type="time" name="opens_at" value="${esc(schedule?.opens_at || '09:00')}"></label>
-    <label class="field">Окончание работы<input type="time" name="closes_at" value="${esc(schedule?.closes_at || '18:00')}"></label>
-    <label class="field">Начало обеда<input type="time" name="lunch_start" value="${esc(schedule?.lunch_start)}"></label>
-    <label class="field">Окончание обеда<input type="time" name="lunch_end" value="${esc(schedule?.lunch_end)}"></label>
+    <div class="field schedule-mode-field"><span class="field-label">Режим записи</span>
+      <div class="schedule-mode-switch" role="group" aria-label="Режим записи">
+       <button type="button" data-schedule-mode="manual">Ручные слоты</button>
+       <button type="button" data-schedule-mode="time">На конкретное время</button>
+       <button type="button" data-schedule-mode="day">На день с лимитом</button>
+      </div>
+      <select name="mode" data-current="${schedule?.mode || 'manual'}" class="visually-hidden" aria-hidden="true" tabindex="-1">
+       <option value="manual">Ручные слоты</option><option value="time">На конкретное время</option><option value="day">На день с лимитом</option>
+      </select>
+    </div>
+    <fieldset id="schedule-days" class="weekday-picker"><legend>Рабочие дни</legend><p class="muted">Выберите дни, когда запись доступна клиентам</p><div>${WEEKDAYS.map((day,i) =>
+      `<label><input type="checkbox" name="weekdays" value="${i+1}" ${(schedule?.weekdays || [1,2,3,4,5]).includes(i+1)?'checked':''}><span>${day}</span></label>`).join('')}</div></fieldset>
+    <fieldset id="schedule-hours" class="schedule-fields"><legend>Рабочие часы</legend>
+     <label class="field">Начало работы<input type="time" name="opens_at" value="${esc(schedule?.opens_at || '09:00')}"></label>
+     <label class="field">Окончание работы<input type="time" name="closes_at" value="${esc(schedule?.closes_at || '18:00')}"></label>
+    </fieldset>
+    <fieldset id="schedule-lunch" class="schedule-fields"><legend>Обеденный перерыв</legend>
+     <label class="field">Начало обеда<input type="time" name="lunch_start" value="${esc(schedule?.lunch_start)}"></label>
+     <label class="field">Окончание обеда<input type="time" name="lunch_end" value="${esc(schedule?.lunch_end)}"></label>
+    </fieldset>
     <label class="field">Дневной лимит<input type="number" name="daily_limit" min="1" max="50" value="${schedule?.daily_limit ?? 5}"></label>
     <button class="button">Сохранить расписание</button><p class="form-error" role="alert"></p>
   </form>`;
@@ -36,6 +47,8 @@ function bindScheduleForm() {
   const syncFields = () => {
     $('#schedule-days').disabled = mode.value === 'manual';
     $('#schedule-days').hidden = mode.value === 'manual';
+    $('#schedule-hours').hidden = mode.value === 'manual';
+    $('#schedule-lunch').hidden = mode.value !== 'time';
     for (const [name, enabled] of Object.entries({
       opens_at: mode.value !== 'manual', closes_at: mode.value !== 'manual',
       lunch_start: mode.value === 'time', lunch_end: mode.value === 'time', daily_limit: mode.value === 'day'
@@ -46,8 +59,19 @@ function bindScheduleForm() {
       field.closest('label').classList.toggle('hidden', !enabled);
     }
   };
-  mode.onchange = syncFields;
-  syncFields();
+  mode.onchange = () => {
+    syncFields();
+    $$('[data-schedule-mode]', form).forEach(button => {
+      const active = button.dataset.scheduleMode === mode.value;
+      button.classList.toggle('active', active);
+      button.setAttribute('aria-pressed', String(active));
+    });
+  };
+  $$('[data-schedule-mode]', form).forEach(button => button.onclick = () => {
+    mode.value = button.dataset.scheduleMode;
+    mode.dispatchEvent(new Event('change', {bubbles:true}));
+  });
+  mode.onchange();
   form.onsubmit = async event => {
     event.preventDefault();
     const fields = new FormData(form);
@@ -59,7 +83,7 @@ function bindScheduleForm() {
     try {
       await api('/master/schedule', data);
       await dashboard();
-      toast('Расписание сохранено');
+      toast('Расписание сохранено', 'success');
     } catch (error) {
       $('.form-error', form).textContent = error.message;
     }
@@ -73,7 +97,7 @@ async function profile(id, preferredServiceId) {
     const {specialists} = await api('/catalog');
     specialist = specialists.find(s => s.id === id);
   }
-  if (!specialist?.services.length) return toast('Специалист сейчас недоступен');
+  if (!specialist?.services.length) return toast('Специалист сейчас недоступен', 'warning');
   activeBooking = new BookingFlow(specialist, preferredServiceId);
   activeBooking.open();
 }
@@ -108,7 +132,7 @@ class BookingFlow {
   open() {
     const s = this.specialist;
     modal(`<section id="booking-flow" aria-label="Запись к специалисту">
-      <div class="profile-head"><img src="${esc(s.photo)}" alt="${esc(s.name)}"><div><span class="eyebrow">${esc(s.profession)}</span><h2>${esc(s.name)}</h2><p>${s.experience} лет опыта · ${reviewCount(s.reviews.length)}</p><p>${esc(s.location)}</p><p data-profile-category></p></div></div>
+      <div class="profile-head"><img src="${esc(s.photo)}" alt="${esc(s.name)}"><div><span class="eyebrow">${esc(s.profession)}</span><h2>${esc(s.name)}</h2><p class="profile-rating"><strong>${s.rating == null ? 'Новый специалист' : `★ ${s.rating}`}</strong> · ${reviewCount(s.reviews.length)}</p><p>${s.experience} лет опыта · ${esc(s.location)}</p><p data-profile-category></p></div></div>
       <nav class="booking-steps" aria-label="Этапы записи"></nav>
       <label class="field">Услуга<select id="booking-service">${s.services.map(v => `<option value="${v.id}">${esc(v.title)} · ${money(v.price)} · ${v.duration} мин</option>`).join('')}</select></label>
       <p class="muted" data-profile-service-category></p>
@@ -227,7 +251,9 @@ class BookingFlow {
       <div class="date-grid" role="group" aria-label="Доступные даты">${pageDays.map(d => `<button data-day="${d}" aria-pressed="${this.day === d}"><b>${new Date(d + 'T12:00:00').getDate()}</b><span>${new Date(d + 'T12:00:00').toLocaleDateString('ru-RU', {month:'short', weekday:'short'})}</span></button>`).join('')}</div>
       <p class="date-range">Расписание опубликовано до ${date(days.at(-1))}.</p>
       <label class="field date-jump">Перейти к дате<input id="jump-date" type="date" min="${days[0]}" max="${days.at(-1)}" value="${this.day || ''}"></label>
-      ${this.dateOnly ? '' : `<div id="times" class="time-grid" role="group" aria-label="Свободное время">${this.day ? this.slots.filter(s => s.starts_at.startsWith(this.day)).map(s => `<button class="slot ${this.slot && this.slotKey(this.slot) === this.slotKey(s) ? 'selected' : ''}" data-slot="${this.slotKey(s)}" aria-pressed="${this.slot && this.slotKey(this.slot) === this.slotKey(s)}" ${s.remaining < 1 ? 'disabled' : ''}>${time(s.starts_at)}<small>${s.remaining > 0 ? s.capacity > 1 ? `${s.remaining} из ${s.capacity} мест` : `${s.duration} мин` : 'Мест нет'}</small></button>`).join('') : '<p class="muted">Сначала выберите дату выше.</p>'}</div>`}
+      ${this.dateOnly ? (this.slot ? `<section class="booking-availability" tabindex="-1"><h4>Дата доступна</h4>
+        ${this.slot.remaining !== undefined ? `<p>Свободных мест: ${this.slot.remaining}</p>` : ''}</section>` : '') :
+        `<section class="booking-availability" tabindex="-1">${this.day ? '<h4>Доступное время</h4>' : ''}<div id="times"  class="time-grid" role="group" aria-label="Свободное время">${this.day ? this.slots.filter(s => s.starts_at.startsWith(this.day)).map(s => `<button class="slot ${this.slot && this.slotKey(this.slot) === this.slotKey(s) ? 'selected' : ''}" data-slot="${this.slotKey(s)}" aria-pressed="${this.slot && this.slotKey(this.slot) === this.slotKey(s)}" ${s.remaining < 1 ? 'disabled' : ''}>${time(s.starts_at)}<small>${s.remaining > 0 ? s.capacity > 1 ? `${s.remaining} из ${s.capacity} мест` : `${s.duration} мин` : 'Мест нет'}</small></button>`).join('') : '<p class="muted">Сначала выберите дату выше.</p>'}</div></section>`}
       <div id="booking-details">${this.slot ? `<div class="service-summary"><strong>${date(this.slot.starts_at)}${this.dateOnly ? '' : ' · ' + time(this.slot.starts_at)}</strong><span>${this.slot.duration} мин · ${esc(this.slot.service)}</span><b>${money(this.slot.price)}</b></div><button id="to-confirmation" class="button full">Продолжить →</button>` : ''}</div>`);
     const turnPage = offset => {
       this.page += offset;
@@ -242,7 +268,8 @@ class BookingFlow {
       this.day = b.dataset.day;
       this.slot = this.dateOnly ? this.slots.find(s => s.date === this.day) : null;
       this.render();
-      $(`[data-day="${this.day}"]`)?.focus();
+      $(`[data-day="${this.day}"]`)?.focus({preventScroll:true});
+      this.revealAvailability();
     });
     $('#jump-date').onchange = e => {
       const index = days.indexOf(e.target.value);
@@ -251,7 +278,8 @@ class BookingFlow {
       if (index >= 0) this.page = Math.floor(index / pageSize);
       this.notice = index < 0 ? 'На эту дату нет свободного времени. Выберите одну из доступных дат.' : '';
       this.render();
-      $('#jump-date').focus();
+      $('#jump-date').focus({preventScroll:true});
+      if (this.day) this.revealAvailability();
     };
     $$('[data-slot]').forEach(b => b.onclick = () => {
       this.slot = {...this.slots.find(s => String(this.slotKey(s)) === b.dataset.slot)};
@@ -288,6 +316,17 @@ class BookingFlow {
       $('#total-price').textContent = money(s.price * this.fields.quantity);
     };
     form.onsubmit = e => { e.preventDefault(); this.submit(); };
+  }
+
+  revealAvailability() {
+    const section = $('.booking-availability');
+    const dialog = $('#modal');
+    if (!section) return;
+    const bounds = section.getBoundingClientRect();
+    const frame = dialog.getBoundingClientRect();
+    if (bounds.top < frame.top + 55 || bounds.top + Math.min(bounds.height, 130) > frame.bottom) {
+      dialog.scrollTop += bounds.top - frame.top - 65;
+    }
   }
 
   async recover(message) {
@@ -342,8 +381,19 @@ class BookingFlow {
       duration: snapshot.duration, price: snapshot.price, mode: snapshot.mode,
       service_address: snapshot.service_address, ...this.fields,
       address: snapshot.mode === 'Выезд' ? this.fields.address : ''};
-    const checking = this.pendingConfirmation || pendingOperations.has(operationIdentity('/bookings', payload));
+    if (this.submitting) return;
     this.submitting = true;
+    let identity, saved;
+    try {
+      identity = await bookingIdentity(payload);
+      saved = sessionStorage.getItem(identity);
+    } catch {
+      this.submitting = false;
+      $('.form-error', $('#book-form') ?? document)?.replaceChildren('Не удалось сохранить ключ записи. Откройте сайт через HTTPS и проверьте доступ к хранилищу браузера.');
+      return;
+    }
+    if (!this.alive) { this.submitting = false; return; }
+    const checking = this.pendingConfirmation || saved !== null;
     $('#booking-service').disabled = true;
     $$('.booking-steps [data-step]').forEach(button => button.disabled = true);
     for (const field of $('#book-form').querySelectorAll('input, textarea')) field.readOnly = true;
@@ -363,7 +413,7 @@ class BookingFlow {
         }
       }
       sent = true;
-      booking = await submitOperation('/bookings', payload);
+      booking = await submitOperation('/bookings', payload, identity);
     } catch (error) {
       if (!this.alive) return;
       this.submitting = false;
@@ -384,12 +434,12 @@ class BookingFlow {
       this.submitting = false;
     }
     if (this.alive) closeModal();
-    toast(`Вы записаны! Запись №${booking.id}. Подробности — в личном кабинете.`);
+    toast(`Вы записаны! Запись №${booking.id}. Подробности — в личном кабинете.`, 'success');
     state.newBookingId = booking.id;
     dashboardMode = 'client';
     dashboardTab = 'bookings';
     dashboardStatusFilter = 'all';
-    if (location.hash === '#dashboard') dashboard().catch(error => toast(error.message));
+    if (location.hash === '#dashboard') dashboard().catch(error => toast(error.message, 'error'));
     else location.hash = 'dashboard';
   }
 

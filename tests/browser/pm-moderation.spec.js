@@ -8,6 +8,7 @@ async function login(page, role) {
 
 async function logout(page) {
   await page.getByRole('button', { name: 'Выйти' }).click();
+  await page.locator('#logout-confirmation button[type=submit]').click();
   await expect(page.locator('#account')).toContainText('Личный кабинет');
 }
 
@@ -27,10 +28,12 @@ test('service applications are private until approval and decisions reach the ma
     const form = page.locator('#service-form');
     await form.getByLabel('Название').fill(title);
     await form.getByLabel('Стоимость').fill('800');
-    await form.getByLabel('Направление').selectOption('home-repair');
-    const category = title === approved ? 'heating' : 'air-conditioning';
-    await form.getByLabel('Поиск категории').fill(title === approved ? 'отоплен' : 'вентиляция');
-    await form.getByLabel('Категория услуги').selectOption(category);
+    await form.locator('select[name=category_group]').selectOption('home-repair');
+    await form.getByRole('button', {name:/Категория услуги —/}).click();
+    const menu = page.locator('.select-popup:popover-open');
+    const query = title === approved ? 'отоплен' : 'вентиляция';
+    await menu.getByRole('searchbox').fill(query);
+    await menu.getByRole('option', {name: new RegExp(query, 'i')}).click();
     await form.getByRole('button', { name: 'Добавить услугу' }).click();
     await expect(page.locator('.service-row').filter({ hasText: title })).toContainText('На проверке');
   }
@@ -98,7 +101,7 @@ test('open moderation and service tabs refresh without reloading', async ({ brow
     const form = master.locator('#service-form');
     await form.getByLabel('Название').fill(title);
     await form.getByLabel('Стоимость').fill('900');
-    await form.getByLabel('Категория услуги').selectOption('plumbing');
+    await form.locator('select[name=category_id]').selectOption('plumbing');
     await form.getByRole('button', { name: 'Добавить услугу' }).click();
     const service = master.locator('.service-row').filter({ hasText: title });
     await expect(service).toContainText('На проверке');

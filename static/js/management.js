@@ -1,41 +1,85 @@
-function openNotificationDetails({message, target}) {
+function openNotificationDetails({message, subject, event, created_at, target}) {
  const item = target?.item;
- if (target?.kind === 'support') {
-  openSupportFromNotice(item, state.user.role === 'admin');
-  return;
- }
- let details = '<p>Связанный объект больше недоступен.</p>';
+ const titles = {
+  specialist_approved:'Заявка специалиста одобрена', specialist_rejected:'Заявка специалиста отклонена',
+  specialist_revoked:'Права специалиста сняты', service_approved:'Услуга одобрена', service_rejected:'Услуга отклонена',
+  confirmed:message.startsWith('Новая запись клиента') ? 'Новая запись клиента' : 'Запись подтверждена',
+  cancelled:'Запись отменена', completed:'Встреча завершена',
+  support_created:'Новое обращение в поддержку', support_resolved:'Поддержка ответила',
+  payment_pending:'Платёж ожидает подтверждения', payment_succeeded:'Платёж подтверждён',
+  payment_canceled:'Платёж отменён', payment_failed:'Ошибка оплаты',
+  refund_pending:'Ожидается возврат', refund_succeeded:'Возврат выполнен', refund_canceled:'Возврат отменён'
+ };
+ const title = subject || titles[event] || 'Уведомление';
+ let copy = message;
+ let fields = [];
+ let content = '';
+ let label;
  if (target?.kind === 'booking') {
-  const status = {confirmed:'Подтверждена', cancelled:'Отменена', completed:'Завершена'};
-  details = `<h3>${esc(item.title)}</h3><p>${esc(item.specialist)} · ${date(item.starts_at)}
-   ${item.booking_mode === 'day' ? '' : time(item.starts_at)} · ${status[item.status]}</p>
-   ${item.cancel_reason ? `<p>Причина отмены: ${esc(item.cancel_reason)}</p>` : ''}`;
+  fields = [['Услуга',item.title], ['Специалист',item.specialist],
+   ['Встреча', date(item.starts_at) + (item.booking_mode === 'day' ? '' : ' · ' + time(item.starts_at))],
+   ['Причина отмены',item.cancel_reason]];
+  if (['confirmed','cancelled','completed'].includes(event)) copy = '';
+  label = 'Открыть запись';
  } else if (target?.kind === 'service') {
-  details = `<h3>${esc(item.title)}</h3><p>${esc(item.mode)} · ${item.duration} мин · ${money(item.price)}</p>
-   <p>${serviceStatus[item.moderation_status]}</p>
-   ${item.draft ? `<p>Изменения «${esc(item.draft.title)}» · ${serviceStatus[item.draft_status]}</p>` : ''}`;
+  fields = [['Услуга',item.draft?.title || item.title], ['Формат',item.mode],
+   ['Длительность',item.duration + ' мин'], ['Цена',money(item.price)],
+   ['Причина отклонения',event === 'service_rejected' ? (item.draft_reason || item.moderation_reason) : null]];
+  copy = '';
+  label = 'Открыть услуги';
  } else if (target?.kind === 'application') {
-  details = `<h3>${esc(item.name)} · ${serviceStatus[item.status]}</h3>
-   <p>${date(item.created_at)} · ${esc(item.category)} · Стаж: ${item.experience} лет</p>
-   <dl>${applicationTextFields.slice(1).map(([field, label]) =>
-    `<dt><strong>${label}</strong></dt><dd>${esc(item[field])}</dd>`).join('')}</dl>
-   ${item.reason ? `<p>Причина отклонения: ${esc(item.reason)}</p>` : ''}`;
+  if (event === 'specialist_approved' && state.user.role === 'master') {
+   copy = 'Вам доступен режим «Специалист».';
+   label = 'Открыть кабинет специалиста';
+  } else if (event === 'specialist_rejected') {
+   copy = '';
+   fields = [['Причина отклонения',item.reason]];
+   label = 'Открыть заявку';
+  }
+ } else if (target?.kind === 'support') {
+  fields = [['Тема',item.title]];
+  if (state.user.role === 'admin') fields.push(['Автор',item.sender_name]);
+  content = supportDetails(item);
+  copy = '';
+  label = 'Открыть обращение';
+ } else if (!['specialist_revoked','admin_message'].includes(event)) {
+  content = '<p class="muted">Связанный объект больше недоступен.</p>';
  }
- modal(`<h2>Уведомление</h2><p>${esc(message)}</p>${details}
-  ${target ? '<button id="notification-go" class="button">Открыть раздел кабинета</button>' : ''}`);
- const go = $('#notification-go');
- if (go) go.onclick = async () => {
+ const status = event.endsWith('_approved') ? ['Одобрено','approved'] :
+  event.endsWith('_rejected') ? ['Отклонено','rejected'] :
+  event === 'specialist_revoked' ? ['Клиент','rejected'] : null;
+ modal(`<article class="notice-detail">
+  <h2>${esc(title)}</h2>
+  <div class="notice-meta"><time datetime="${esc(created_at)}">${date(created_at)} · ${time(created_at)} (Киров)</time>
+   ${status ? `<span class="badge ${status[1]}">${status[0]}</span>` : ''}</div>
+  ${event === 'admin_message' ? '<p class="muted">Сообщение администрации</p>' : ''}
+  ${copy ? `<p class="notice-copy">${esc(copy)}</p>` : ''}
+  ${fields.some(([,value]) => value) ? `<dl class="detail-grid">${fields.filter(([,value]) => value)
+   .map(([key,value]) => `<dt>${esc(key)}</dt><dd>${esc(value)}</dd>`).join('')}</dl>` : ''}
+  ${content}
+  ${label ? `<button id="${target.kind === 'support' ? 'support-go' : 'notification-go'}" class="button">${label}</button>` : ''}
+ </article>`);
+ const go = $('#notification-go, #support-go');
+ if (!go) return;
+ go.onclick = async () => {
   dashboardMode = target.mode;
   dashboardTab = target.tab;
   dashboardStatusFilter = 'all';
+  if (event === 'specialist_approved') {
+   dashboardMode = 'master';
+   dashboardTab = 'bookings';
+  }
+  if (target.kind === 'support') {
+   supportView.status = 'all';
+   supportView.open.add(item.id);
+  }
   closeModal();
   try {
    await dashboard();
-   const row = target.kind === 'booking' ? $(`[data-booking-id="${item.id}"]`) :
-    target.kind === 'service' ? $(`[data-service-id="${item.id}"]`) : null;
-   row?.scrollIntoView({block:'center'});
+   const attribute = {booking:'data-booking-id', service:'data-service-id', support:'data-support-id'}[target.kind];
+   if (attribute) $(`[${attribute}="${item.id}"]`)?.scrollIntoView({block:'center'});
   } catch (error) {
-   toast(error.message);
+   toast(error.message, 'error');
   }
  };
 }
@@ -43,10 +87,10 @@ function openNotificationDetails({message, target}) {
 function managementConfirmation(title, description, reason, action, options = {}) {
  modal(`<h2>${esc(title)}</h2><p>${esc(description)}</p>
   <form id="management-confirmation">
-   ${reason ? '<label class="field">Причина отмены (необязательно)<textarea name="reason" maxlength="500"></textarea></label>' : ''}
+   ${reason ? `<label class="field">${options.reasonLabel || 'Причина отмены (необязательно)'}<textarea name="reason" maxlength="500" ${options.reasonLabel ? 'required' : ''}></textarea></label>` : ''}
    <div class="dialog-actions">
     <button id="keep-booking" class="button outline" type="button">${esc(options.back ?? 'Назад')}</button>
-    <button id="confirm-cancel" class="button">${esc(options.confirm ?? 'Да, подтвердить')}</button>
+    <button id="confirm-cancel" class="button ${options.confirmClass || ''}">${esc(options.confirm ?? 'Да, подтвердить')}</button>
    </div>
    <p class="form-error" role="alert"></p>
   </form>`);
@@ -62,7 +106,7 @@ function managementConfirmation(title, description, reason, action, options = {}
    const message = await action(form.elements.reason?.value ?? '');
    form.removeAttribute('data-pending-deletion');
    if (form.isConnected) closeModal();
-   toast(message);
+   toast(message, 'success');
    if (location.hash === '#dashboard') await dashboard();
   } catch (error) {
    $('.form-error', form).textContent = error.message;
@@ -122,8 +166,8 @@ function bindServiceForm(form, path, categories, initialCategory, inModal = fals
     await api(path, data);
    }
    if (inModal && form.isConnected) closeModal();
-   toast('Услуга отправлена на проверку');
-   dashboard().catch(error => toast(error.message));
+   toast('Услуга отправлена на проверку', 'success');
+   dashboard().catch(error => toast(error.message, 'error'));
   } catch (error) {
    $('.form-error', form).textContent = error.message;
   } finally {
@@ -160,7 +204,7 @@ function renderManagedServices(root, services, categories) {
   $('[data-edit-service]', row).onclick = () => {
    const edited = service.draft ?? service;
    modal(`<h2>Изменить услугу</h2><form id="edit-service-form">${serviceFormFields(edited)}
-    <button type="submit" class="button">Отправить на проверку</button><p class="form-error" role="alert"></p></form>`);
+    <button type="submit" class="button">Отправить на проверку</button><p class="form-error" role="alert"></p></form>`, 'service-editor');
    bindServiceForm($('#edit-service-form'), `/master/services/${service.id}/edit`, categories, edited.category_id, true);
   };
   $('[data-delete-service]', row).onclick = async () => {
@@ -168,7 +212,7 @@ function renderManagedServices(root, services, categories) {
     const {services: updated} = await api('/master');
     if (!row.isConnected) return;
     const current = updated.find(item => item.id === service.id);
-    if (!current) return toast('Услуга уже недоступна');
+    if (!current) return toast('Услуга уже недоступна', 'warning');
     const warning = current.upcoming_count ? `Предстоящих записей: ${current.upcoming_count}. ` : '';
     managementConfirmation('Удалить услугу?', warning + 'Существующие записи сохранятся. Новые записи будут недоступны.',
      false, async () => {
@@ -176,8 +220,151 @@ function renderManagedServices(root, services, categories) {
       return 'Услуга удалена';
      });
    } catch (error) {
-    toast(error.message);
+    toast(error.message, 'error');
    }
   };
  }
+}
+
+let focusAdminUser = null;
+
+function renderAdminUsers(root, users) {
+ const roles = {client:'Клиент',master:'Специалист',admin:'Администратор'};
+ root.innerHTML = `<h2>Пользователи</h2>
+  <div class="admin-user-filters">
+   <label class="field">Поиск<input id="user-query" type="search" placeholder="Имя, логин или почта"></label>
+   <label class="field">Роль<select id="user-role"><option value="">Все роли</option>
+    ${Object.entries(roles).map(([key, label]) => `<option value="${key}">${label}</option>`).join('')}</select></label>
+   <label class="field">Сортировка<select id="user-sort">
+    <option value="1">По имени (А–Я)</option><option value="-1">По имени (Я–А)</option>
+   </select></label>
+  </div>
+  <p class="muted" id="user-count" role="status"></p><div id="user-results"></div>`;
+ const search = $('#user-query', root);
+ const role = $('#user-role', root);
+ const sort = $('#user-sort', root);
+ const results = $('#user-results', root);
+ const open = new Set(focusAdminUser ? [focusAdminUser] : []);
+ const draw = () => {
+  const query = search.value.trim().toLocaleLowerCase('ru');
+  const filtered = users.filter(user => (!role.value || user.role === role.value) &&
+   [user.name,user.username,user.email].some(value => value?.toLocaleLowerCase('ru').includes(query)));
+  filtered.sort((a,b) => sort.value * a.name.localeCompare(b.name, 'ru') || a.id-b.id);
+  $('#user-count', root).textContent = 'Найдено: ' + filtered.length;
+  results.innerHTML = filtered.length ? filtered.map(user => `
+   <details class="panel admin-user" data-account-id="${user.id}" ${open.has(user.id) ? 'open' : ''}>
+    <summary><strong>${esc(user.name)}</strong><span class="badge ${user.role === 'master' ? 'approved' : ''}">${roles[user.role]}</span></summary>
+    <div class="admin-user-body">
+     <dl class="detail-grid"><dt>Логин</dt><dd>${esc(user.username || '—')}</dd>
+      <dt>Почта</dt><dd>${esc(user.email || '—')}</dd></dl>
+     ${user.specialist ? `<h3>Профиль специалиста</h3>
+      <dl class="detail-grid"><dt>Профессия</dt><dd>${esc(user.specialist.profession || '—')}</dd>
+       <dt>Категория</dt><dd>${esc(user.specialist.category || '—')}</dd>
+       <dt>Каталог</dt><dd>${user.specialist.active ? 'Опубликован' : 'Скрыт'}</dd>
+       <dt>Описание</dt><dd>${esc(user.specialist.bio || '—')}</dd></dl>
+      <h3>Услуги</h3>${user.specialist.services.length ? `<ul class="admin-user-services">${user.specialist.services
+       .map(service => `<li>${esc(service.title)}${service.active ? '' : ' · Скрыта'}</li>`).join('')}</ul>` :
+       '<p class="muted">Услуг пока нет.</p>'}` : ''}
+     <div class="dialog-actions admin-user-actions">
+      <button class="button outline" data-user-action="message">Написать пользователю</button>
+      ${user.id !== state.user.id ? '<button class="button outline" data-user-action="role">Изменить роль</button><button class="button outline danger" data-user-action="delete">Удалить аккаунт</button>' : ''}
+     </div>
+    </div>
+   </details>`).join('') : '<p class="empty">По выбранным условиям пользователей нет.</p>';
+ };
+ search.oninput = role.onchange = sort.onchange = draw;
+ results.addEventListener('toggle', event => {
+  const row = event.target;
+  const id = Number(row.dataset.accountId);
+  if (!id) return;
+  if (row.open) open.add(id);
+  else open.delete(id);
+ }, true);
+ results.onclick = event => {
+  const action = event.target.closest('[data-user-action]');
+  if (action) {
+   const user = users.find(user => user.id === Number(action.closest('[data-account-id]').dataset.accountId));
+   adminUserAction(user, action.dataset.userAction, roles);
+   return;
+  }
+
+ };
+ draw();
+ if (focusAdminUser) {
+  const summary = $(`[data-account-id="${focusAdminUser}"] summary`, root);
+  summary?.focus();
+  focusAdminUser = null;
+ }
+}
+
+function adminUserAction(user, action, roles) {
+ const base = `/admin/users/${user.id}`;
+ if (action === 'delete') {
+  managementConfirmation('Удалить аккаунт?',
+   `${user.name} потеряет доступ к аккаунту. Записи и платежи останутся в истории, личные данные будут обезличены.`,
+   false, async () => {
+    await api(base, undefined, 'DELETE');
+    return 'Аккаунт удалён';
+   }, {back:'Отмена',confirm:'Удалить аккаунт',confirmClass:'danger-solid',lockWhilePending:true});
+  return;
+ }
+ const messaging = action === 'message';
+ const choices = user.role === 'client' ? ['master', 'admin'] : user.role === 'master' ? ['client', 'admin'] : ['client'];
+ modal(`<h2>${messaging ? 'Написать пользователю' : 'Изменить роль'}</h2>
+  <p>${esc(user.name)} · ${roles[user.role]}</p><form id="admin-user-form">
+   ${messaging ? `<label class="field">Тема<input name="subject" required maxlength="120"></label>
+    <label class="field">Текст сообщения<textarea name="body" required maxlength="2000"></textarea></label>` :
+    `<label class="field">Новая роль<select name="role" required><option value="">Выберите роль</option>
+     ${choices.map(role => `<option value="${role}">${roles[role]}</option>`).join('')}</select></label>
+    <p data-role-help class="muted"></p><button type="button" class="text-button" data-open-applications hidden>Открыть заявки специалистов</button>
+    ${user.role === 'master' ? '<label class="field">Причина снятия прав<textarea name="reason" required maxlength="500"></textarea></label>' : ''}
+    <label class="role-confirm" hidden><input type="checkbox" name="confirm"> Подтверждаю выдачу прав администратора</label>`}
+   <div class="dialog-actions"><button type="button" class="button outline" data-back>Отмена</button>
+    <button type="submit" class="button">${messaging ? 'Отправить' : 'Сохранить роль'}</button></div>
+   <p class="form-error" role="alert"></p>
+  </form>`);
+ const form = $('#admin-user-form');
+ $('[data-back]', form).onclick = closeModal;
+ if (!messaging) $('[data-open-applications]', form).onclick = () => {
+  closeModal();
+  specialistApplicationFilter = 'pending';
+  dashboardTab = 'specialist-applications';
+  dashboard().catch(error => toast(error.message, 'error'));
+ };
+ if (!messaging) form.elements.role.onchange = () => {
+  const role = form.elements.role.value;
+  form.elements.confirm.closest('label').hidden = role !== 'admin';
+  form.elements.confirm.required = role === 'admin';
+  $('[data-open-applications]', form).hidden = role !== 'master';
+  $('[data-role-help]', form).textContent = role === 'admin'
+   ? 'Пользователь получит доступ к управлению аккаунтами, ролями, заявками и журналом действий.'
+   : role === 'master' ? 'Права выдаются через одобрение текущей заявки пользователя. Если заявки нет, попросите его подать её.' : '';
+ };
+ form.onsubmit = async event => {
+  event.preventDefault();
+  const button = $('button[type=submit]', form);
+  if (button.disabled) return;
+  const data = Object.fromEntries(new FormData(form));
+  if (!messaging) data.confirm = form.elements.confirm.checked;
+  const error = $('.form-error', form);
+  error.textContent = '';
+  form.setAttribute('data-pending-deletion', '');
+  button.disabled = true;
+  try {
+   if (messaging) await submitOperation(base + '/message', data);
+   else await api(base + '/role', data);
+   form.removeAttribute('data-pending-deletion');
+   closeModal();
+   if (!messaging) {
+    focusAdminUser = user.id;
+    dashboard().catch(error => toast(error.message, 'error'));
+   }
+   toast(messaging ? 'Сообщение отправлено' : 'Роль изменена', 'success');
+  } catch (failure) {
+   error.textContent = failure.message;
+  } finally {
+   form.removeAttribute('data-pending-deletion');
+   button.disabled = false;
+  }
+ };
 }

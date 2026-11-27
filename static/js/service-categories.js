@@ -47,7 +47,7 @@ function bindCatalogCategories() {
 
 function serviceCategoryFields() {
  return `<label class="field">Направление<select name="category_group"></select></label>
-  <label class="field">Поиск категории<input type="search" data-category-search placeholder="Например, сантехника"></label>
+  ${HTMLElement.prototype.showPopover ? '' : '<label class="field">Поиск категории<input type="search" data-category-search placeholder="Например, сантехника"></label>'}
   <label class="field">Категория услуги<select name="category_id" required></select>
    <span class="form-error category-unavailable" role="status"></span></label>
   <button type="button" class="text-button" data-suggest-category>Не нашли нужную категорию?</button>`;
@@ -65,7 +65,7 @@ function bindServiceCategories(form, groups, initialCategory) {
  };
 
  function update(selected) {
-  const query = search.value.trim().toLowerCase().replaceAll('ё', 'е');
+  const query = search?.value.trim().toLowerCase().replaceAll('ё', 'е') || '';
   const matches = item => item.id === selected || item.name.toLowerCase().replaceAll('ё', 'е').includes(query);
   const options = categorySelectOptions(groups, direction.value, matches);
   category.innerHTML = `<option value="">${options ? 'Выберите категорию' : 'Категории не найдены'}</option>` + options;
@@ -76,10 +76,10 @@ function bindServiceCategories(form, groups, initialCategory) {
  }
 
  direction.onchange = () => {
-  search.value = '';
+  if (search) search.value = '';
   update('');
  };
- search.oninput = () => update(category.value);
+ search?.addEventListener('input', () => update(category.value));
  category.onchange = () => {
   if (category.value) warning.textContent = '';
   direction.value = groupOf(category.value)?.id ?? direction.value;

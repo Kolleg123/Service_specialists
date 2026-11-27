@@ -75,7 +75,7 @@ test('specialist updates their public name and photo, and admin removes only the
   expect((await post(admin, `/admin/service-applications/${serviceId}/decision`, {status:'approved', revision})).ok()).toBeTruthy();
 
   await page.reload();
-  await page.locator('#dashboard-mode').selectOption('client');
+  await page.getByRole('button', {name:'Клиент', exact:true}).click();
   await page.getByRole('button', {name:'Профиль', exact:true}).click();
   await page.getByRole('button', {name:'Изменить данные'}).click();
   await page.getByLabel('ФИО').fill('ФИО после обновления');
@@ -90,10 +90,10 @@ test('specialist updates their public name and photo, and admin removes only the
   const photo = await accountAvatar.getAttribute('src');
   await expect(page.locator('#avatar-preview img')).toHaveAttribute('src', photo);
   await avatar.setInputFiles({name:'broken.png', mimeType:'image/png', buffer:Buffer.from('bad image')});
-  await page.getByRole('button', {name:'Сохранить фото'}).click();
-  await expect(page.locator('#avatar-form [role=alert]')).toContainText('Файл повреждён');
+  await expect(page.locator('#avatar-form [role=alert]')).toContainText('Не удалось открыть изображение');
+  await expect(page.getByRole('button', {name:'Сохранить фото'})).toBeDisabled();
   await expect(accountAvatar).toHaveAttribute('src', photo);
-  await page.locator('#dashboard-mode').selectOption('master');
+  await page.getByRole('button', {name:'Специалист', exact:true}).click();
   await page.getByRole('button', {name:'Профиль', exact:true}).click();
   await expect(page.locator('#profile-view')).toContainText('ФИО после обновления');
   await expect(page.locator('#profile-view')).toContainText('profile-updated@example.test');
@@ -110,13 +110,20 @@ test('specialist updates their public name and photo, and admin removes only the
 
   await admin.getByRole('button', {name:'Специалисты и услуги'}).click();
   const person = admin.locator('.admin-person').filter({hasText:'ФИО после обновления'});
-  await person.getByRole('button', {name:'Удалить', exact:true}).click();
+  await person.getByRole('button', {name:'Открыть аккаунт'}).click();
+  const account = admin.locator('.admin-user').filter({hasText:'ФИО после обновления'});
+  const role = account.getByRole('button', {name:'Изменить роль'});
+  await role.click();
   const confirmation = admin.locator('#modal');
-  await confirmation.getByRole('button', {name:'Оставить', exact:true}).click();
-  await expect(person).toBeVisible();
-  await person.getByRole('button', {name:'Удалить', exact:true}).click();
-  await confirmation.getByRole('button', {name:'Удалить навсегда'}).click();
-  await expect(person).toHaveCount(0);
+  await confirmation.getByRole('button', {name:'Отмена', exact:true}).click();
+  await expect(role).toBeVisible();
+  await role.click();
+  await confirmation.locator('select[name=role]').selectOption('client');
+  await confirmation.getByLabel('Причина снятия прав').fill('Профиль закрыт по просьбе специалиста.');
+  await confirmation.getByRole('button', {name:'Сохранить роль', exact:true}).click();
+  await expect(account.locator('summary')).toContainText('Клиент');
+  await admin.getByRole('button', {name:'Журнал действий'}).click();
+  await expect(admin.locator('.audit-log')).toContainText('Профиль закрыт по просьбе специалиста.');
   await page.reload();
   await expect(publicCard).toHaveCount(0);
   const session = await (await page.request.get('/api/session')).json();

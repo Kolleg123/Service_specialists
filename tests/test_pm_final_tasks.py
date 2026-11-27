@@ -219,3 +219,27 @@ def test_recovery_trusts_only_configured_proxy_and_does_not_wait_for_smtp(tmp_pa
         assert sources == ['192.0.2.10', '192.0.2.20']
     finally:
         release.set()
+
+
+def test_booking_requires_key_and_cancelling_allows_new_group_booking(tmp_path):
+    app = setup(tmp_path, DEMO_MODE=True)
+    customer = client(app, 'client')
+    slots = customer.get('/api/slots/4').json['slots']
+    slot = next(slot for slot in slots if slot['capacity'] > 2)
+    data = {'slot_id': slot['id'], 'quantity': 2}
+    csrf = customer.get('/api/session').json['csrf']
+    assert customer.post('/api/bookings', json=data, headers={'X-CSRF-Token': csrf}).status_code == 400
+    assert submit(customer, '/bookings', data, 'invalid key').status_code == 400
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        first_tab = pool.submit(submit, customer, '/bookings', data, 'first-group-booking')
+        second_tab = pool.submit(submit, client(app, 'client'), '/bookings', data, 'second-group-booking')
+        responses = [(first_tab.result(), 'first-group-booking'), (second_tab.result(), 'second-group-booking')]
+    assert sorted(result.status_code for result, _ in responses) == [201, 409]
+    first, key = next((result, key) for result, key in responses if result.status_code == 201)
+    other = client(app, 'ivan')
+    assert other.get('/api/bookings/attempt', headers={'Idempotency-Key': key}).json['booking'] is None
+    assert customer.get('/api/bookings/attempt', headers={'Idempotency-Key': key}).json['booking'] == first.json
+    assert post(customer, f"/bookings/{first.json['id']}/cancel", {}).status_code == 200
+    assert submit(customer, '/bookings', data, key).json == first.json
+    new_booking = submit(customer, '/bookings', data, 'after-cancellation')
+    assert new_booking.status_code == 201 and new_booking.json != first.json

@@ -134,17 +134,18 @@ def retire_specialist(connection, specialist_id, *, remove_identity=False):
     return specialist['photo']
 
 
-def retire_account(connection, user_id, current_time):
-    connection.execute('BEGIN IMMEDIATE')
+def retire_account(connection, user_id, current_time, *, admin=False, locked=False):
+    if not locked:
+        connection.execute('BEGIN IMMEDIATE')
     user = account(connection, user_id)
     if not user:
         raise ProfileError('Войдите в личный кабинет', 401)
-    if user['role'] not in ('client', 'master'):
+    if user['role'] not in ('client', 'master') and not (admin and user['role'] == 'admin'):
         raise ProfileError('Удаление этого аккаунта недоступно', 403)
     bookings = connection.execute("""SELECT s.starts_at,s.ends_at slot_ends_at,v.duration
         FROM bookings b JOIN slots s ON s.id=b.slot_id JOIN services v ON v.id=s.service_id
         WHERE b.user_id=? AND b.status='confirmed'""", (user_id,))
-    if any(booking_interval(booking)[1] > current_time for booking in bookings):
+    if any(admin or booking_interval(booking)[1] > current_time for booking in bookings):
         raise ProfileError('Сначала отмените предстоящие записи и дождитесь окончания текущих', 409)
 
     photo = None
@@ -152,7 +153,7 @@ def retire_account(connection, user_id, current_time):
         photo = retire_specialist(connection, user['specialist_id'], remove_identity=True)
 
     # Keep joins and foreign keys for shared history. No login or private account data survives.
-    for table in ('notifications', 'searches', 'password_reset_tokens', 'specialist_applications'):
+    for table in ('idempotent_operations', 'notifications', 'searches', 'password_reset_tokens', 'specialist_applications'):
         connection.execute(f'DELETE FROM {table} WHERE user_id=?', (user_id,))
     connection.execute('UPDATE bookings SET address=NULL,note=NULL WHERE user_id=?', (user_id,))
     connection.execute("""UPDATE support_requests SET sender_name=?,sender_email='',

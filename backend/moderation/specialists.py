@@ -15,7 +15,7 @@ TEXT_FIELDS = {
 PROFILE_FIELDS = (*TEXT_FIELDS, 'category', 'experience', 'category_group_id')
 
 
-def submit_application(connection, user_id, data, clock):
+def profile_values(connection, data):
     values = {}
     for key, (label, minimum, maximum) in TEXT_FIELDS.items():
         value = data.get(key)
@@ -25,13 +25,18 @@ def submit_application(connection, user_id, data, clock):
     category, experience = data.get('category'), data.get('experience')
     if type(experience) is not int or not 0 <= experience <= 80:
         raise ModerationError('Укажите стаж от 0 до 80 полных лет')
-    connection.execute('BEGIN IMMEDIATE')
     group = profile_group(connection, category)
     if not group:
         raise ModerationError('Выберите категорию из каталога')
     label = connection.execute('SELECT name FROM service_categories WHERE id=?', (group,)).fetchone()[0]
     values.update(category=label if category == group else category, experience=experience, category_group_id=group)
 
+    return values
+
+
+def submit_application(connection, user_id, data, clock):
+    connection.execute('BEGIN IMMEDIATE')
+    values = profile_values(connection, data)
     user = connection.execute('SELECT role,specialist_id FROM users WHERE id=?', (user_id,)).fetchone()
     if not user or user['role'] != 'client' or user['specialist_id'] is not None:
         raise ModerationError('Заявку может подать клиент без профиля специалиста', 403)
@@ -52,7 +57,7 @@ def latest_application(connection, user_id):
     return dict(row) if row else None
 
 
-def decide_application(connection, application_id, data, clock):
+def decide_application(connection, application_id, data, clock, *, locked=False):
     status = data.get('status')
     if status not in ('approved', 'rejected'):
         raise ModerationError('Выберите решение: одобрить или отклонить')
@@ -63,7 +68,8 @@ def decide_application(connection, application_id, data, clock):
             raise ModerationError('Укажите причину отклонения от 1 до 500 символов')
         reason = value.strip()
 
-    connection.execute('BEGIN IMMEDIATE')
+    if not locked:
+        connection.execute('BEGIN IMMEDIATE')
     application = connection.execute('''SELECT a.*,u.role,u.specialist_id,u.avatar FROM specialist_applications a
         JOIN users u ON u.id=a.user_id WHERE a.id=?''', (application_id,)).fetchone()
     if not application:

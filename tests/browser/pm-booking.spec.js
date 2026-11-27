@@ -8,6 +8,7 @@ async function login(page, role) {
 
 async function logout(page) {
   await page.getByRole('button', { name: 'Выйти' }).click();
+  await page.locator('#logout-confirmation button[type=submit]').click();
   await expect(page.locator('#account')).toContainText('Личный кабинет');
 }
 
@@ -30,7 +31,7 @@ async function loginCustomer(page, register = false) {
 async function configure(page, mode, specialist = 'Преподаватель') {
   await login(page, specialist);
   await page.getByRole('button', { name: 'Моё расписание' }).click();
-  await page.getByLabel('Режим записи').selectOption(mode);
+  await page.getByRole('button', {name: mode === 'manual' ? 'Ручные слоты' : mode === 'time' ? 'На конкретное время' : 'На день с лимитом'}).click();
   if (mode === 'time') {
     await page.getByLabel('Начало обеда').fill('12:00');
     await page.getByLabel('Окончание обеда').fill('13:00');

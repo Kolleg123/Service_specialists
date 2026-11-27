@@ -93,13 +93,13 @@ test('support suggestion, live catalog changes, moderation and confirmed transfe
   await ticket.getByRole('button', {name: 'Ответить и завершить'}).click();
   await expect(ticket).toContainText('Обработано');
   await master.clock.runFor(11000);
-  await expect(form.getByLabel('Категория услуги').locator(`option[value="${categoryId}"]`)).toHaveCount(1);
+  await expect(form.locator('select[name=category_id]').locator(`option[value="${categoryId}"]`)).toHaveCount(1);
   await notice(master, 'Ответ на обращение «Предложение новой категории»');
   await expect(master.locator('#modal')).toContainText('Добавили категорию в справочник.');
   await master.locator('#modal-close').click();
   await expect(form.getByLabel('Название')).toHaveValue('Настройка домашней автоматики');
 
-  await form.getByLabel('Категория услуги').selectOption(categoryId);
+  await form.locator('select[name=category_id]').selectOption(categoryId);
   await form.getByRole('button', {name: 'Добавить услугу'}).click();
   const service = master.locator('.service-row').filter({hasText: 'Настройка домашней автоматики'});
   await expect(service).toContainText('На проверке');
@@ -122,18 +122,18 @@ test('support suggestion, live catalog changes, moderation and confirmed transfe
   await admin.getByRole('button', {name: 'Категории услуг', exact: true}).click();
   await item.getByRole('button', {name: 'Изменить'}).click();
   await editor.getByLabel('Название').fill('Умный дом');
-  await editor.getByLabel('Группа').selectOption('it');
+  await editor.locator('select[name=parent_id]').selectOption('it');
   await editor.getByRole('button', {name: 'Сохранить'}).click();
   await master.clock.runFor(11000);
   await expect(service).toContainText('IT и фриланс / Умный дом');
   expect((await master.request.get(`/api/services/${serviceId}`)).ok()).toBeTruthy();
 
-  await form.getByLabel('Категория услуги').selectOption(categoryId);
+  await form.locator('select[name=category_id]').selectOption(categoryId);
   await form.getByLabel('Название').fill('Сохранённый черновик');
   await admin.locator('#directory-search').fill('Умный дом');
   const renamed = admin.locator('.directory-category').filter({hasText: 'Умный дом'});
   await renamed.getByRole('button', {name: 'Удалить'}).click();
-  await admin.getByLabel('Категория для переноса').selectOption('plumbing');
+  await admin.locator('select[name=replacement_id]').selectOption('plumbing');
   await admin.getByRole('button', {name: 'Проверить перенос'}).click();
   await admin.getByRole('button', {name: 'Да, подтвердить'}).click();
   await expect(renamed).toHaveCount(0);
